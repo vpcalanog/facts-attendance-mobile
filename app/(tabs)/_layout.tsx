@@ -1,33 +1,58 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { Tabs } from "expo-router";
+import React from "react";
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { HapticTab } from "@/components/haptic-tab";
+import LogoMark from "@/components/logo-mark";
+import { BRAND } from "@/constants/brand";
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
+        headerShown: true,
         tabBarButton: HapticTab,
-      }}>
+        tabBarActiveTintColor: BRAND.signal,
+        tabBarInactiveTintColor: BRAND.smoke,
+        tabBarStyle: {
+          backgroundColor: BRAND.surface,
+          borderTopColor: BRAND.line,
+          borderTopWidth: 1
+        },
+        headerStyle: {
+          backgroundColor: BRAND.void,
+          borderBottomColor: BRAND.line,
+          borderBottomWidth: 1
+        },
+        headerTitle: () => <LogoMark size={26} withWordmark />,
+        headerTitleAlign: "left"
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: "Scan",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="camera" size={size} color={color} />
+          )
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="manual"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: "Manual",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="keypad" size={size} color={color} />
+          )
+        }}
+      />
+      <Tabs.Screen
+        name="logs"
+        options={{
+          title: "Logs",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="list" size={size} color={color} />
+          )
         }}
       />
     </Tabs>

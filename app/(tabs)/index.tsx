@@ -1,98 +1,405 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import CornerFlag from "@/components/corner-flag";
+import StudentPreviewCard from "@/components/student-preview-card";
+import { BRAND } from "@/constants/brand";
+import { useAuth } from "@/context/auth-context";
+import { useSync } from "@/context/sync-context";
+import { authFetch } from "@/lib/api";
+import {
+  findRecentDuplicate,
+  findStudent,
+  insertAttendance,
+  RosterRow
+} from "@/lib/db";
+import { extractCandidate, isValidId } from "@/lib/extract";
+import {
+  CameraCapturedPicture,
+  CameraView,
+  useCameraPermissions
+} from "expo-camera";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from "react-native";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+const DUP_WINDOW_MS = 5 * 60 * 1000;
 
-export default function HomeScreen() {
+interface OcrWord {
+  WordText?: string;
+}
+interface OcrLine {
+  Words?: OcrWord[];
+}
+
+export default function ScanScreen() {
+  const { user } = useAuth();
+  const { sync } = useSync();
+  const [permission, requestPermission] = useCameraPermissions();
+  const [cameraActive, setCameraActive] = useState(true);
+  const [captured, setCaptured] = useState<CameraCapturedPicture | null>(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [resultValue, setResultValue] = useState("");
+  const [resultVisible, setResultVisible] = useState(false);
+  const [student, setStudent] = useState<RosterRow | null>(null);
+  const [dupWarning, setDupWarning] = useState<{
+    studentNumber: string;
+    mins: number;
+  } | null>(null);
+  const [confirmForce, setConfirmForce] = useState(false);
+  const [toast, setToast] = useState<{
+    type: "success" | "warn";
+    text: string;
+  } | null>(null);
+  const cameraRef = useRef<CameraView>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      setCameraActive(true);
+      return () => setCameraActive(false);
+    }, [])
+  );
+
+  async function lookupStudent(sn: string) {
+    if (!isValidId(sn)) {
+      setStudent(null);
+      return;
+    }
+    setStudent(await findStudent(sn));
+  }
+
+  async function captureAndScan() {
+    if (!cameraRef.current) return;
+    setDupWarning(null);
+    setConfirmForce(false);
+    setToast(null);
+    setResultVisible(false);
+
+    const photo = await cameraRef.current.takePictureAsync({
+      base64: true,
+      quality: 0.5
+    });
+    if (!photo) return;
+    setCaptured(photo);
+    setOcrLoading(true);
+
+    try {
+      const data = await authFetch("/api/ocr", {
+        method: "POST",
+        body: JSON.stringify({
+          imageBase64: `data:image/jpeg;base64,${photo.base64}`
+        })
+      });
+
+      const lines: OcrLine[] = data.lines || [];
+      let candidate = "";
+      outerWordLoop: for (const line of lines) {
+        for (const w of line.Words || []) {
+          const c = extractCandidate(w.WordText || "");
+          if (c) {
+            candidate = c;
+            break outerWordLoop;
+          }
+        }
+      }
+      if (!candidate) {
+        for (const line of lines) {
+          const c = extractCandidate(
+            (line.Words || []).map((w) => w.WordText).join(" ")
+          );
+          if (c) {
+            candidate = c;
+            break;
+          }
+        }
+      }
+      if (!candidate) candidate = extractCandidate(data.text || "");
+
+      setResultValue(candidate);
+      await lookupStudent(candidate);
+    } catch (err: any) {
+      setToast({
+        type: "warn",
+        text: err?.message || "OCR request failed — try the Manual tab instead."
+      });
+      setResultValue("");
+    } finally {
+      setOcrLoading(false);
+      setResultVisible(true);
+    }
+  }
+
+  function retake() {
+    setCaptured(null);
+    setResultVisible(false);
+    setResultValue("");
+    setStudent(null);
+    setDupWarning(null);
+    setConfirmForce(false);
+  }
+
+  async function handleConfirm() {
+    const sn = resultValue;
+    if (!isValidId(sn)) return;
+    if (!confirmForce) {
+      const dup = await findRecentDuplicate(sn, DUP_WINDOW_MS);
+      if (dup) {
+        const mins = Math.max(
+          1,
+          Math.round((Date.now() - new Date(dup.timestamp).getTime()) / 60000)
+        );
+        setDupWarning({ studentNumber: sn, mins });
+        setConfirmForce(true);
+        return;
+      }
+    }
+    await insertAttendance({ studentNumber: sn, loggedBy: user?.username });
+    setToast({
+      type: "success",
+      text: `${sn} logged at ${new Date().toLocaleTimeString()}`
+    });
+    retake();
+    sync();
+  }
+
+  if (!permission) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={BRAND.signal} />
+      </View>
+    );
+  }
+
+  if (!permission.granted) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.permText}>
+          Camera access is needed to scan student IDs.
+        </Text>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={requestPermission}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.buttonText}>Grant camera access</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.viewfinder}>
+        {captured ? (
+          <Image
+            source={{ uri: captured.uri }}
+            style={styles.preview}
+            resizeMode="contain"
+          />
+        ) : cameraActive ? (
+          <CameraView ref={cameraRef} style={styles.preview} facing="back" />
+        ) : null}
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+        {/* Reticle brackets — the scan affordance, drawn from the logo's
+            own angular blades rather than a generic rounded frame. */}
+        <View style={[styles.bracket, styles.bracketTL]} pointerEvents="none" />
+        <View style={[styles.bracket, styles.bracketTR]} pointerEvents="none" />
+        <View style={[styles.bracket, styles.bracketBL]} pointerEvents="none" />
+        <View style={[styles.bracket, styles.bracketBR]} pointerEvents="none" />
+
+        {ocrLoading && (
+          <View style={styles.loadingOverlay}>
+            <ActivityIndicator color={BRAND.signal} />
+          </View>
+        )}
+      </View>
+
+      {!captured && (
+        <TouchableOpacity
+          style={styles.button}
+          onPress={captureAndScan}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.buttonText}>Scan ID</Text>
+        </TouchableOpacity>
+      )}
+
+      {toast && (
+        <View
+          style={[
+            styles.notice,
+            toast.type === "success" ? styles.noticeOk : styles.noticeWarn
+          ]}
+        >
+          <Text style={styles.noticeText}>{toast.text}</Text>
+        </View>
+      )}
+
+      {resultVisible && (
+        <View style={styles.resultCard}>
+          <CornerFlag size={22} />
+          <Text style={styles.resultLabel}>
+            {resultValue
+              ? "Detected student number — check it's correct"
+              : "Couldn't auto-detect a number"}
+          </Text>
+          <Text style={styles.resultValue}>{resultValue || "—"}</Text>
+
+          <StudentPreviewCard student={student} studentNumber={resultValue} />
+
+          {dupWarning && (
+            <View style={[styles.notice, styles.noticeWarn]}>
+              <Text style={styles.noticeText}>
+                {dupWarning.studentNumber} was already logged {dupWarning.mins}{" "}
+                min ago. Tap "Log anyway" to confirm.
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton]}
+              onPress={retake}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.buttonTextDark}>Retake</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.button,
+                !isValidId(resultValue) && styles.buttonDisabled
+              ]}
+              disabled={!isValidId(resultValue)}
+              onPress={handleConfirm}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.buttonText}>
+                {confirmForce ? "Log anyway" : "Log attendance"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: { padding: 16, gap: 12, backgroundColor: BRAND.void, flexGrow: 1 },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    gap: 14,
+    backgroundColor: BRAND.void
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  permText: { textAlign: "center", fontSize: 14, color: BRAND.smoke },
+  viewfinder: {
+    aspectRatio: 3 / 4,
+    borderRadius: 14,
+    overflow: "hidden",
+    backgroundColor: "#000",
+    borderWidth: 1,
+    borderColor: BRAND.line
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  preview: { width: "100%", height: "100%" },
+  bracket: { position: "absolute", width: 30, height: 30 },
+  bracketTL: {
+    top: 12,
+    left: 12,
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
+    borderColor: BRAND.signal
   },
+  bracketTR: {
+    top: 12,
+    right: 12,
+    borderTopWidth: 3,
+    borderRightWidth: 3,
+    borderColor: BRAND.signal
+  },
+  bracketBL: {
+    bottom: 12,
+    left: 12,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderColor: BRAND.signal
+  },
+  bracketBR: {
+    bottom: 12,
+    right: 12,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderColor: BRAND.signal
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(10,7,8,0.55)",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  button: {
+    backgroundColor: BRAND.signal,
+    borderRadius: 10,
+    paddingVertical: 20,
+    alignItems: "center",
+    alignSelf: "center",
+    justifyContent: "center",
+    shadowColor: BRAND.signal,
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+    height: 75,
+    width: 150
+  },
+  secondaryButton: {
+    backgroundColor: BRAND.surfaceRaised,
+    shadowOpacity: 0,
+    elevation: 0,
+    borderWidth: 1,
+    borderColor: BRAND.line
+  },
+  buttonDisabled: { opacity: 0.5 },
+  buttonText: {
+    color: BRAND.void,
+    fontWeight: "800",
+    fontSize: 15,
+    letterSpacing: 0.5
+  },
+  buttonTextDark: { color: BRAND.bone, fontWeight: "700", fontSize: 15 },
+  buttonContainer: {
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "center",
+    marginTop: 12
+  },
+  row: { flexDirection: "row", gap: 20, marginTop: 12 },
+  resultCard: {
+    backgroundColor: BRAND.surface,
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: BRAND.line,
+    overflow: "hidden"
+  },
+  resultLabel: { color: BRAND.smoke, fontSize: 13 },
+  resultValue: {
+    color: BRAND.bone,
+    fontSize: 22,
+    fontWeight: "800",
+    marginTop: 6,
+    letterSpacing: 1,
+    fontFamily: "SpaceMono"
+  },
+  notice: { padding: 10, borderRadius: 10, marginTop: 10 },
+  noticeOk: { backgroundColor: BRAND.greenDim },
+  noticeWarn: { backgroundColor: BRAND.amberDim },
+  noticeText: { color: BRAND.bone, fontSize: 13 }
 });
