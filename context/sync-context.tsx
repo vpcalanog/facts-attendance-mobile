@@ -1,8 +1,8 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from "react";
-import { AppState } from "react-native";
-import NetInfo from "@react-native-community/netinfo";
-import { runSync, SyncResult } from "@/lib/sync";
 import { getPendingCount, initDb } from "@/lib/db";
+import { runSync, SyncResult } from "@/lib/sync";
+import NetInfo from "@react-native-community/netinfo";
+import React, { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import { useAuth } from "./auth-context";
 
 interface SyncContextValue {
@@ -12,7 +12,7 @@ interface SyncContextValue {
   lastSyncAt: string | null;
   lastSyncError: string | null;
   online: boolean;
-  sync: (opts?: { forceRoster?: boolean }) => Promise<SyncResult | undefined>;
+  sync: (opts?: { forceRoster?: boolean; forceEvents?: boolean }) => Promise<SyncResult | undefined>;
   refreshPendingCount: () => Promise<void>;
 }
 
@@ -39,7 +39,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, [dbReady]);
 
   const sync = useCallback(
-    async (opts?: { forceRoster?: boolean }) => {
+    async (opts?: { forceRoster?: boolean; forceEvents?: boolean }) => {
       if (!dbReady || !user || syncingRef.current) return;
       syncingRef.current = true;
       setSyncing(true);
@@ -62,7 +62,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   // Initial + periodic sync while foregrounded and logged in.
   useEffect(() => {
     if (!dbReady || !user) return;
-    sync({ forceRoster: true });
+    sync({ forceRoster: true, forceEvents: true });
     const interval = setInterval(() => sync(), AUTO_SYNC_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [dbReady, user, sync]);

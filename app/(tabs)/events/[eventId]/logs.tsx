@@ -1,60 +1,68 @@
 import CornerFlag from "@/components/corner-flag";
-import SyncStatusBadge from "@/components/sync-status-badge";
 import { BRAND } from "@/constants/brand";
-import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
-import { AttendanceRow, findStudent, getAllEntries, RosterRow } from "@/lib/db";
+import { AttendanceRow, EventRow, findStudent, getAllEntries, getEvent, RosterRow } from "@/lib/db";
 import { normalize } from "@/lib/extract";
 import { fmtRelative, fmtTimestamp, isToday } from "@/lib/format";
 import * as FileSystem from "expo-file-system";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    FlatList,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from "react-native";
 
 export default function LogsScreen() {
-  const { user, logout } = useAuth();
-  const { sync, syncing } = useSync();
+  const { eventId } = useLocalSearchParams<{ eventId: string }>();
+  const { sync } = useSync();
+  const [event, setEvent] = useState<EventRow | null>(null);
   const [entries, setEntries] = useState<AttendanceRow[]>([]);
   const [roster, setRoster] = useState<Record<string, RosterRow>>({});
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async (q: string) => {
-    const rows = await getAllEntries({ search: q ? normalize(q) : undefined });
-    setEntries(rows);
+  useEffect(() => {
+    if (!eventId) return;
+    getEvent(eventId).then(setEvent);
+  }, [eventId]);
 
-    // Enrich with roster info so each row can show who was actually
-    // scanned, not just their number — one lookup per unique student.
-    // Normalize first: entries logged via OCR aren't guaranteed to be in
-    // the same exact form as the roster's student numbers, even though
-    // they refer to the same student.
-    const uniqueNumbers = Array.from(
-      new Set(rows.map((r) => normalize(r.studentNumber)))
-    );
-    const found = await Promise.all(
-      uniqueNumbers.map(async (sn) => [sn, await findStudent(sn)] as const)
-    );
-    const map: Record<string, RosterRow> = {};
-    for (const [sn, row] of found) {
-      if (!row) continue;
-      map[sn] = {
-        studentNumber: row.studentNumber,
-        name: row.name,
-        course: row.course,
-        yearLevel: row.yearLevel
-      };
-    }
-    setRoster(map);
-  }, []);
+  const load = useCallback(
+    async (q: string) => {
+      if (!eventId) return;
+      const rows = await getAllEntries({ eventId, search: q ? normalize(q) : undefined });
+      setEntries(rows);
+
+      // Enrich with roster info so each row can show who was actually
+      // scanned, not just their number — one lookup per unique student.
+      // Normalize first: entries logged via OCR aren't guaranteed to be in
+      // the same exact form as the roster's student numbers, even though
+      // they refer to the same student.
+      const uniqueNumbers = Array.from(
+        new Set(rows.map((r) => normalize(r.studentNumber)))
+      );
+      const found = await Promise.all(
+        uniqueNumbers.map(async (sn) => [sn, await findStudent(sn)] as const)
+      );
+      const map: Record<string, RosterRow> = {};
+      for (const [sn, row] of found) {
+        if (!row) continue;
+        map[sn] = {
+          studentNumber: row.studentNumber,
+          name: row.name,
+          course: row.course,
+          yearLevel: row.yearLevel
+        };
+      }
+      setRoster(map);
+    },
+    [eventId]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -85,7 +93,8 @@ export default function LogsScreen() {
         )
       );
     const csv = rows.join("\n");
-    const fileUri = `${FileSystem.cacheDirectory}attendance-${new Date().toISOString().slice(0, 10)}.csv`;
+    const slug = (event?.name || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const fileUri = `${FileSystem.cacheDirectory}${slug}-${new Date().toISOString().slice(0, 10)}.csv`;
     await FileSystem.writeAsStringAsync(fileUri, csv, {
       encoding: FileSystem.EncodingType.UTF8
     });
@@ -101,11 +110,8 @@ export default function LogsScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.count}>{todayCount} logged today</Text>
-            <Text style={styles.subtle}>
-              Signed in as {user?.name || user?.username}
-            </Text>
+            <Text style={styles.subtle}>{event?.name || "Event"}</Text>
           </View>
-          <SyncStatusBadge />
         </View>
 
         <TextInput
@@ -123,27 +129,10 @@ export default function LogsScreen() {
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => sync({ forceRoster: true })}
-            disabled={syncing}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.actionText}>
-              {syncing ? "Syncing…" : "Sync now"}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.actionButton}
             onPress={exportCsv}
             activeOpacity={0.85}
           >
             <Text style={styles.actionText}>Export CSV</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.logoutButton]}
-            onPress={logout}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.actionText}>Log out</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -237,10 +226,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: BRAND.line
-  },
-  logoutButton: {
-    backgroundColor: BRAND.crimsonDeep,
-    borderColor: BRAND.crimson
   },
   actionText: { color: BRAND.bone, fontSize: 12, fontWeight: "700" },
   row: {

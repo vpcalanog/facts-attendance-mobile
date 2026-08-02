@@ -17,42 +17,34 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: BRAND.surface,
           borderTopColor: BRAND.line,
-          borderTopWidth: 1
+          borderTopWidth: 1,
         },
         headerStyle: {
           backgroundColor: BRAND.void,
           borderBottomColor: BRAND.line,
-          borderBottomWidth: 1
+          borderBottomWidth: 1,
         },
         headerTitle: () => <LogoMark size={26} withWordmark />,
-        headerTitleAlign: "left"
+        headerTitleAlign: "left",
       }}
     >
       <Tabs.Screen
-        name="index"
+        name="events"
         options={{
-          title: "Scan",
+          title: "Events",
+          headerShown: false, // events/_layout.tsx renders its own headers
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="camera" size={size} color={color} />
-          )
+            <Ionicons name="calendar" size={size} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
-        name="manual"
+        name="profile"
         options={{
-          title: "Manual",
+          title: "Profile",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="keypad" size={size} color={color} />
-          )
-        }}
-      />
-      <Tabs.Screen
-        name="logs"
-        options={{
-          title: "Logs",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list" size={size} color={color} />
-          )
+            <Ionicons name="person-circle" size={size} color={color} />
+          ),
         }}
       />
     </Tabs>
