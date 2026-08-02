@@ -4,47 +4,63 @@ import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
 import {
-  findRecentDuplicate,
-  findStudent,
-  insertAttendance,
-  RosterRow
+    checkEventEligibility,
+    EventRow,
+    findRecentDuplicate,
+    findStudent,
+    getEvent,
+    insertAttendance,
+    RosterRow
 } from "@/lib/db";
 import { isValidId, normalize } from "@/lib/extract";
+import { useLocalSearchParams } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from "react-native";
 
 const DUP_WINDOW_MS = 5 * 60 * 1000;
 
 export default function ManualEntryScreen() {
+  const { eventId } = useLocalSearchParams<{ eventId: string }>();
   const { user } = useAuth();
   const { sync } = useSync();
+  const [event, setEvent] = useState<EventRow | null>(null);
   const [value, setValue] = useState("");
   const [student, setStudent] = useState<RosterRow | null>(null);
+  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(null);
   const [dupText, setDupText] = useState("");
   const [force, setForce] = useState(false);
   const [toast, setToast] = useState<{ text: string } | null>(null);
+
+  useEffect(() => {
+    if (!eventId) return;
+    getEvent(eventId).then(setEvent);
+  }, [eventId]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!isValidId(value)) {
         setStudent(null);
+        setEligibilityWarning(null);
         return;
       }
       const found = await findStudent(value);
-      if (!cancelled) setStudent(found);
+      if (!cancelled) {
+        setStudent(found);
+        setEligibilityWarning(event ? checkEventEligibility(event, found) : null);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [value]);
+  }, [value, event]);
 
   function onChange(text: string) {
     setValue(normalize(text));
@@ -53,25 +69,26 @@ export default function ManualEntryScreen() {
   }
 
   async function handleConfirm() {
-    if (!isValidId(value)) return;
+    if (!eventId || !isValidId(value)) return;
     if (!force) {
-      const dup = await findRecentDuplicate(value, DUP_WINDOW_MS);
+      const dup = await findRecentDuplicate(value, DUP_WINDOW_MS, eventId);
       if (dup) {
         const mins = Math.max(
           1,
           Math.round((Date.now() - new Date(dup.timestamp).getTime()) / 60000)
         );
         setDupText(
-          `${value} was logged ${mins} min ago. Tap "Log anyway" to log again.`
+          `${value} was logged ${mins} min ago at this event. Tap "Log anyway" to log again.`
         );
         setForce(true);
         return;
       }
     }
-    await insertAttendance({ studentNumber: value, loggedBy: user?.username });
+    await insertAttendance({ studentNumber: value, eventId, loggedBy: user?.username });
     setToast({ text: `${value} logged at ${new Date().toLocaleTimeString()}` });
     setValue("");
     setStudent(null);
+    setEligibilityWarning(null);
     setForce(false);
     setDupText("");
     sync();
@@ -113,6 +130,12 @@ export default function ManualEntryScreen() {
       {isValidId(value) && (
         <StudentPreviewCard student={student} studentNumber={value} />
       )}
+
+      {eligibilityWarning ? (
+        <View style={styles.notice}>
+          <Text style={styles.noticeText}>{eligibilityWarning}</Text>
+        </View>
+      ) : null}
 
       {dupText ? (
         <View style={styles.notice}>

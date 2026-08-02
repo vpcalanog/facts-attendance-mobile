@@ -1,7 +1,7 @@
 import {
   DarkTheme,
   DefaultTheme,
-  ThemeProvider
+  ThemeProvider,
 } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
@@ -11,6 +11,7 @@ import "react-native-reanimated";
 import { AuthProvider, useAuth } from "@/context/auth-context";
 import { SyncProvider } from "@/context/sync-context";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 function RootLayoutNav() {
   const { user, checking } = useAuth();
@@ -34,7 +35,7 @@ function RootLayoutNav() {
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const [loaded] = useFonts({
-    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf")
+    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
   });
 
   if (!loaded) {
@@ -42,15 +43,17 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <AuthProvider>
-        <SyncProvider>
-          <RootLayoutNav />
-          {/* The app runs on a single warm-black brand theme regardless of
-              system scheme, so status bar content stays light throughout. */}
-          <StatusBar style="light" />
-        </SyncProvider>
-      </AuthProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        <AuthProvider>
+          <SyncProvider>
+            <RootLayoutNav />
+            {/* The app runs on a single warm-black brand theme regardless of
+                system scheme, so status bar content stays light throughout. */}
+            <StatusBar style="light" />
+          </SyncProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
