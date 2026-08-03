@@ -18,7 +18,7 @@ const SATELLITE_RADIUS = 92;
 const HIT_RADIUS = 46;
 const HOLD_MS = 220;
 
-const ANCHOR_BOTTOM = 40;
+const ANCHOR_BOTTOM = 100;
 const ANCHOR_RIGHT = 24;
 
 type OptionKey = "index" | "manual" | "logs";
@@ -187,8 +187,10 @@ const styles = StyleSheet.create({
   button: {
     width: BUTTON_SIZE,
     height: BUTTON_SIZE,
-    borderRadius: BUTTON_SIZE / 2,
     backgroundColor: BRAND.signal,
+    borderColor: BRAND.danger,
+    borderWidth: 2,
+    borderRadius: BUTTON_SIZE / 2,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: BRAND.signal,

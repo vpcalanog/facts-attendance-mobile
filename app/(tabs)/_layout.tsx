@@ -32,7 +32,7 @@ export default function TabLayout() {
         name="events"
         options={{
           title: "Events",
-          headerShown: false, // events/_layout.tsx renders its own headers
+          headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="calendar" size={size} color={color} />
           ),

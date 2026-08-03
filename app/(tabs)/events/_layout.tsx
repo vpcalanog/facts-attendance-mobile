@@ -9,8 +9,6 @@ export default function EventsLayout() {
       screenOptions={{
         headerStyle: {
           backgroundColor: BRAND.void,
-          borderBottomColor: BRAND.line,
-          borderBottomWidth: 1,
         },
         headerTintColor: BRAND.bone,
         headerBackTitle: "Back",

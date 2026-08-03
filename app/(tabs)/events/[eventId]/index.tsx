@@ -53,7 +53,9 @@ export default function ScanScreen() {
   const [resultValue, setResultValue] = useState("");
   const [resultVisible, setResultVisible] = useState(false);
   const [student, setStudent] = useState<RosterRow | null>(null);
-  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(null);
+  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(
+    null,
+  );
   const [dupWarning, setDupWarning] = useState<{
     studentNumber: string;
     mins: number;
@@ -199,7 +201,11 @@ export default function ScanScreen() {
         return;
       }
     }
-    await insertAttendance({ studentNumber: sn, eventId, loggedBy: user?.username });
+    await insertAttendance({
+      studentNumber: sn,
+      eventId,
+      loggedBy: user?.username,
+    });
     setToast({
       type: "success",
       text: `${sn} logged at ${new Date().toLocaleTimeString()}`,
@@ -361,9 +367,12 @@ const styles = StyleSheet.create({
     aspectRatio: 3 / 4,
     borderRadius: 14,
     overflow: "hidden",
+    flex: 1,
+    alignSelf: "center",
     backgroundColor: "#000",
     borderWidth: 1,
     borderColor: BRAND.line,
+    width: "75%",
   },
   preview: { width: "100%", height: "100%" },
   bracket: { position: "absolute", width: 30, height: 30 },
@@ -413,7 +422,6 @@ const styles = StyleSheet.create({
   button: {
     backgroundColor: BRAND.signal,
     borderRadius: 10,
-    paddingVertical: 20,
     alignItems: "center",
     alignSelf: "center",
     justifyContent: "center",
@@ -422,7 +430,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 3 },
     elevation: 3,
-    height: 75,
+    height: 50,
     width: 150,
   },
   secondaryButton: {
@@ -434,7 +442,7 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.5 },
   buttonText: {
-    color: BRAND.void,
+    color: BRAND.bone,
     fontWeight: "800",
     fontSize: 15,
     letterSpacing: 0.5,
