@@ -1,4 +1,3 @@
-import CornerFlag from "@/components/corner-flag";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
@@ -13,7 +12,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 
 export default function EventsScreen() {
@@ -34,7 +33,7 @@ export default function EventsScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load])
+    }, [load]),
   );
 
   async function onRefresh() {
@@ -47,7 +46,6 @@ export default function EventsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.toolbar}>
-        <CornerFlag size={22} />
         <View style={styles.header}>
           <Text style={styles.title}>Events</Text>
           {isAdmin && (
@@ -68,7 +66,11 @@ export default function EventsScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingBottom: 24 }}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND.signal} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={BRAND.signal}
+          />
         }
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -101,7 +103,9 @@ export default function EventsScreen() {
         )}
         ListEmptyComponent={
           <Text style={styles.empty}>
-            {isAdmin ? "No events yet — tap New to create one." : "No events yet."}
+            {isAdmin
+              ? "No events yet — tap New to create one."
+              : "No events yet."}
           </Text>
         }
       />
@@ -112,7 +116,11 @@ export default function EventsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BRAND.void, padding: 16 },
   toolbar: { marginBottom: 14 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   title: { color: BRAND.bone, fontSize: 22, fontWeight: "800" },
   newButton: {
     flexDirection: "row",
@@ -121,7 +129,7 @@ const styles = StyleSheet.create({
     backgroundColor: BRAND.signal,
     borderRadius: 8,
     paddingVertical: 8,
-    paddingHorizontal: 12
+    paddingHorizontal: 12,
   },
   newButtonText: { color: BRAND.void, fontWeight: "800", fontSize: 13 },
   card: {
@@ -130,11 +138,16 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: BRAND.line
+    borderColor: BRAND.line,
   },
   name: { color: BRAND.bone, fontSize: 16, fontWeight: "700" },
   meta: { color: BRAND.smoke, fontSize: 12, marginTop: 4 },
-  pendingTag: { color: BRAND.amber, fontSize: 11, fontWeight: "600", marginTop: 4 },
+  pendingTag: {
+    color: BRAND.amber,
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 4,
+  },
   tags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   tag: {
     backgroundColor: BRAND.surfaceRaised,
@@ -142,8 +155,8 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     paddingHorizontal: 8,
     borderWidth: 1,
-    borderColor: BRAND.line
+    borderColor: BRAND.line,
   },
   tagText: { color: BRAND.smoke, fontSize: 11, fontWeight: "600" },
-  empty: { color: BRAND.smoke, textAlign: "center", marginTop: 40 }
+  empty: { color: BRAND.smoke, textAlign: "center", marginTop: 40 },
 });

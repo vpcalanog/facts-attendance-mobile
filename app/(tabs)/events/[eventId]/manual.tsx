@@ -4,24 +4,24 @@ import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
 import {
-    checkEventEligibility,
-    EventRow,
-    findRecentDuplicate,
-    findStudent,
-    getEvent,
-    insertAttendance,
-    RosterRow
+  checkEventEligibility,
+  EventRow,
+  findRecentDuplicate,
+  findStudent,
+  getEvent,
+  insertAttendance,
+  RosterRow,
 } from "@/lib/db";
 import { isValidId, normalize } from "@/lib/extract";
 import { useLocalSearchParams } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 const DUP_WINDOW_MS = 5 * 60 * 1000;
@@ -33,7 +33,9 @@ export default function ManualEntryScreen() {
   const [event, setEvent] = useState<EventRow | null>(null);
   const [value, setValue] = useState("");
   const [student, setStudent] = useState<RosterRow | null>(null);
-  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(null);
+  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(
+    null,
+  );
   const [dupText, setDupText] = useState("");
   const [force, setForce] = useState(false);
   const [toast, setToast] = useState<{ text: string } | null>(null);
@@ -54,7 +56,9 @@ export default function ManualEntryScreen() {
       const found = await findStudent(value);
       if (!cancelled) {
         setStudent(found);
-        setEligibilityWarning(event ? checkEventEligibility(event, found) : null);
+        setEligibilityWarning(
+          event ? checkEventEligibility(event, found) : null,
+        );
       }
     })();
     return () => {
@@ -75,16 +79,20 @@ export default function ManualEntryScreen() {
       if (dup) {
         const mins = Math.max(
           1,
-          Math.round((Date.now() - new Date(dup.timestamp).getTime()) / 60000)
+          Math.round((Date.now() - new Date(dup.timestamp).getTime()) / 60000),
         );
         setDupText(
-          `${value} was logged ${mins} min ago at this event. Tap "Log anyway" to log again.`
+          `${value} was logged ${mins} min ago at this event. Tap "Log anyway" to log again.`,
         );
         setForce(true);
         return;
       }
     }
-    await insertAttendance({ studentNumber: value, eventId, loggedBy: user?.username });
+    await insertAttendance({
+      studentNumber: value,
+      eventId,
+      loggedBy: user?.username,
+    });
     setToast({ text: `${value} logged at ${new Date().toLocaleTimeString()}` });
     setValue("");
     setStudent(null);
@@ -103,7 +111,7 @@ export default function ManualEntryScreen() {
         <TextInput
           style={[
             styles.input,
-            value.length > 0 && !isValidId(value) && styles.inputInvalid
+            value.length > 0 && !isValidId(value) && styles.inputInvalid,
           ]}
           maxLength={11}
           value={value}
@@ -117,7 +125,7 @@ export default function ManualEntryScreen() {
           <Text
             style={[
               styles.validity,
-              isValidId(value) ? styles.validityOk : styles.validityBad
+              isValidId(value) ? styles.validityOk : styles.validityBad,
             ]}
           >
             {isValidId(value)
@@ -180,7 +188,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: BRAND.line,
-    overflow: "hidden"
+    overflow: "hidden",
   },
   label: { color: BRAND.smoke, fontSize: 13, marginBottom: 8 },
   input: {
@@ -193,7 +201,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 22,
     letterSpacing: 2,
-    fontFamily: "SpaceMono"
+    fontFamily: "SpaceMono",
   },
   inputInvalid: { borderColor: BRAND.danger },
   validity: { fontSize: 12, marginTop: 6 },
@@ -213,21 +221,21 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 3 },
-    elevation: 3
+    elevation: 3,
   },
   secondaryButton: {
     backgroundColor: BRAND.surfaceRaised,
     shadowOpacity: 0,
     elevation: 0,
     borderWidth: 1,
-    borderColor: BRAND.line
+    borderColor: BRAND.line,
   },
   buttonDisabled: { opacity: 0.5 },
   buttonText: {
-    color: BRAND.void,
+    color: BRAND.bone,
     fontWeight: "800",
     fontSize: 15,
-    letterSpacing: 0.5
+    letterSpacing: 0.5,
   },
-  buttonTextDark: { color: BRAND.bone, fontWeight: "700", fontSize: 15 }
+  buttonTextDark: { color: BRAND.bone, fontWeight: "700", fontSize: 15 },
 });

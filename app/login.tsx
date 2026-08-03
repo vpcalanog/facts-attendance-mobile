@@ -1,4 +1,3 @@
-import CornerFlag from "@/components/corner-flag";
 import LogoMark from "@/components/logo-mark";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
@@ -11,7 +10,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 
 export default function LoginScreen() {
@@ -31,7 +30,7 @@ export default function LoginScreen() {
     try {
       await login({
         username: username.trim(),
-        password
+        password,
       });
       // No manual navigation needed — Stack.Protected in app/_layout.tsx
       // re-evaluates as soon as `user` changes and swaps to (tabs) itself.
@@ -50,25 +49,25 @@ export default function LoginScreen() {
         <View
           style={[
             styles.ray,
-            { left: "18%", transform: [{ rotate: "18deg" }], opacity: 0.14 }
+            { left: "18%", transform: [{ rotate: "18deg" }], opacity: 0.14 },
           ]}
         />
         <View
           style={[
             styles.ray,
-            { left: "38%", transform: [{ rotate: "8deg" }], opacity: 0.22 }
+            { left: "38%", transform: [{ rotate: "8deg" }], opacity: 0.22 },
           ]}
         />
         <View
           style={[
             styles.ray,
-            { left: "56%", transform: [{ rotate: "-4deg" }], opacity: 0.2 }
+            { left: "56%", transform: [{ rotate: "-4deg" }], opacity: 0.2 },
           ]}
         />
         <View
           style={[
             styles.ray,
-            { left: "76%", transform: [{ rotate: "-16deg" }], opacity: 0.12 }
+            { left: "76%", transform: [{ rotate: "-16deg" }], opacity: 0.12 },
           ]}
         />
       </View>
@@ -84,13 +83,12 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.card}>
-          <CornerFlag size={26} />
           <Text style={styles.subtitle}>Sign in</Text>
 
           <Text style={styles.label}>Username</Text>
           <TextInput
             style={styles.input}
-            placeholder="e.g. jsantos"
+            placeholder="e.g. amabini"
             placeholderTextColor={BRAND.smoke}
             autoCapitalize="none"
             autoCorrect={false}
@@ -123,9 +121,9 @@ export default function LoginScreen() {
             )}
           </TouchableOpacity>
 
-          <Text style={styles.hint}>
+          {/* <Text style={styles.hint}>
             Accounts are created by an admin on the server.
-          </Text>
+          </Text> */}
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -141,14 +139,14 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 340,
-    overflow: "hidden"
+    overflow: "hidden",
   },
   ray: {
     position: "absolute",
     top: -60,
     width: 3,
     height: 420,
-    backgroundColor: BRAND.signal
+    backgroundColor: BRAND.signal,
   },
   brandBlock: { alignItems: "center", marginBottom: 28 },
   brandTitle: {
@@ -156,14 +154,14 @@ const styles = StyleSheet.create({
     fontSize: 30,
     fontWeight: "900",
     letterSpacing: 6,
-    marginTop: 14
+    marginTop: 14,
   },
   brandSubtitle: {
     color: BRAND.smoke,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 4,
-    marginTop: 4
+    marginTop: 4,
   },
   card: {
     backgroundColor: BRAND.surface,
@@ -171,7 +169,7 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: BRAND.line,
-    overflow: "hidden"
+    overflow: "hidden",
   },
   subtitle: {
     fontSize: 13,
@@ -179,7 +177,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
     fontWeight: "700",
     letterSpacing: 2,
-    textTransform: "uppercase"
+    textTransform: "uppercase",
   },
   label: { fontSize: 13, color: BRAND.smoke, marginTop: 12, marginBottom: 4 },
   input: {
@@ -190,7 +188,7 @@ const styles = StyleSheet.create({
     color: BRAND.bone,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 15
+    fontSize: 15,
   },
   error: { color: BRAND.danger, marginTop: 14, fontSize: 13 },
   button: {
@@ -203,14 +201,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 4
+    elevation: 4,
   },
   buttonDisabled: { opacity: 0.7 },
   buttonText: {
     color: BRAND.void,
     fontWeight: "800",
     fontSize: 15,
-    letterSpacing: 1
+    letterSpacing: 1,
   },
-  hint: { color: BRAND.smoke, fontSize: 11, marginTop: 16, textAlign: "center" }
+  hint: {
+    color: BRAND.smoke,
+    fontSize: 11,
+    marginTop: 16,
+    textAlign: "center",
+  },
 });

@@ -1,4 +1,3 @@
-import CornerFlag from "@/components/corner-flag";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
@@ -11,7 +10,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 
 export default function CreateEventScreen() {
@@ -26,9 +25,12 @@ export default function CreateEventScreen() {
   const [name, setName] = useState("");
   const [courses, setCourses] = useState<string[]>([]);
   const [yearLevels, setYearLevels] = useState<string[]>([]);
-  const [facets, setFacets] = useState<{ courses: string[]; yearLevels: string[] }>({
+  const [facets, setFacets] = useState<{
+    courses: string[];
+    yearLevels: string[];
+  }>({
     courses: [],
-    yearLevels: []
+    yearLevels: [],
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -41,8 +43,14 @@ export default function CreateEventScreen() {
     if (!isAdmin) router.back();
   }, [isAdmin, router]);
 
-  function toggle(list: string[], setList: (v: string[]) => void, value: string) {
-    setList(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
+  function toggle(
+    list: string[],
+    setList: (v: string[]) => void,
+    value: string,
+  ) {
+    setList(
+      list.includes(value) ? list.filter((v) => v !== value) : [...list, value],
+    );
   }
 
   async function handleCreate() {
@@ -57,7 +65,7 @@ export default function CreateEventScreen() {
         name: name.trim(),
         courses,
         yearLevels,
-        createdBy: user?.username || null
+        createdBy: user?.username || null,
       });
       // Push right away rather than waiting for the next timer tick, so
       // the event is usable across devices as soon as possible.
@@ -75,7 +83,6 @@ export default function CreateEventScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.card}>
-        <CornerFlag size={22} />
         <Text style={styles.label}>Event name</Text>
         <TextInput
           style={styles.input}
@@ -96,7 +103,12 @@ export default function CreateEventScreen() {
               onPress={() => toggle(courses, setCourses, c)}
               activeOpacity={0.85}
             >
-              <Text style={[styles.chipText, courses.includes(c) && styles.chipTextActive]}>
+              <Text
+                style={[
+                  styles.chipText,
+                  courses.includes(c) && styles.chipTextActive,
+                ]}
+              >
                 {c}
               </Text>
             </TouchableOpacity>
@@ -117,13 +129,20 @@ export default function CreateEventScreen() {
               onPress={() => toggle(yearLevels, setYearLevels, y)}
               activeOpacity={0.85}
             >
-              <Text style={[styles.chipText, yearLevels.includes(y) && styles.chipTextActive]}>
+              <Text
+                style={[
+                  styles.chipText,
+                  yearLevels.includes(y) && styles.chipTextActive,
+                ]}
+              >
                 {y}
               </Text>
             </TouchableOpacity>
           ))}
           {facets.yearLevels.length === 0 && (
-            <Text style={styles.subtle}>No year levels found in roster yet.</Text>
+            <Text style={styles.subtle}>
+              No year levels found in roster yet.
+            </Text>
           )}
         </View>
       </View>
@@ -140,7 +159,9 @@ export default function CreateEventScreen() {
         disabled={saving}
         activeOpacity={0.85}
       >
-        <Text style={styles.buttonText}>{saving ? "Creating…" : "Create event"}</Text>
+        <Text style={styles.buttonText}>
+          {saving ? "Creating…" : "Create event"}
+        </Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -154,7 +175,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: BRAND.line,
-    overflow: "hidden"
+    overflow: "hidden",
   },
   label: { color: BRAND.smoke, fontSize: 13, marginBottom: 8 },
   section: { marginTop: 18 },
@@ -166,7 +187,7 @@ const styles = StyleSheet.create({
     color: BRAND.bone,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    fontSize: 16
+    fontSize: 16,
   },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
@@ -175,7 +196,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderWidth: 1,
     borderColor: BRAND.line,
-    backgroundColor: BRAND.surfaceRaised
+    backgroundColor: BRAND.surfaceRaised,
   },
   chipActive: { backgroundColor: BRAND.signal, borderColor: BRAND.signal },
   chipText: { color: BRAND.smoke, fontSize: 13, fontWeight: "600" },
@@ -192,8 +213,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 3 },
-    elevation: 3
+    elevation: 3,
   },
   buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: BRAND.void, fontWeight: "800", fontSize: 15, letterSpacing: 0.5 }
+  buttonText: {
+    color: BRAND.void,
+    fontWeight: "800",
+    fontSize: 15,
+    letterSpacing: 0.5,
+  },
 });
