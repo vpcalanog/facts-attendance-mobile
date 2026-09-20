@@ -1,105 +1,184 @@
 import CornerFlag from "@/components/corner-flag";
 import { BRAND } from "@/constants/brand";
 import { useSync } from "@/context/sync-context";
-import { AttendanceRow, EventRow, findStudent, getAllEntries, getEvent, RosterRow } from "@/lib/db";
-import { normalize } from "@/lib/extract";
-import { fmtRelative, fmtTimestamp, isToday } from "@/lib/format";
-import * as FileSystem from "expo-file-system";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
-import * as Sharing from "expo-sharing";
-import React, { useCallback, useEffect, useState } from "react";
+import { useEvent } from "@/hooks/use-event";
 import {
-    FlatList,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  AttendanceWithStudent,
+  countEntries,
+  countEntriesToday,
+  getAllEntriesForExport,
+  getEntriesWithStudents,
+} from "@/lib/db";
+import { userMessage } from "@/lib/errors";
+import { normalize } from "@/lib/extract";
+import { fmtRelative, fmtTimestamp } from "@/lib/format";
+import { log } from "@/lib/logger";
+import { File, Paths } from "expo-file-system";
+import { useFocusEffect } from "expo-router";
+import * as Sharing from "expo-sharing";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
+const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 250;
+
+/** RFC 4180 quoting. Student names can contain commas, and an unescaped
+ *  one silently shifts every later column in the exported file. */
+function csvCell(value: string | null | undefined): string {
+  const s = value == null ? "" : String(value);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 export default function LogsScreen() {
-  const { eventId } = useLocalSearchParams<{ eventId: string }>();
+  const { eventId, event } = useEvent();
   const { sync } = useSync();
-  const [event, setEvent] = useState<EventRow | null>(null);
-  const [entries, setEntries] = useState<AttendanceRow[]>([]);
-  const [roster, setRoster] = useState<Record<string, RosterRow>>({});
+
+  const [entries, setEntries] = useState<AttendanceWithStudent[]>([]);
+  const [total, setTotal] = useState(0);
+  const [todayCount, setTodayCount] = useState(0);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  // Monotonic token: only the newest query is allowed to write state.
+  // Every keystroke used to fire an un-sequenced query, so a slower
+  // earlier one could land last and show results for a stale term.
+  const queryToken = useRef(0);
+  const mounted = useRef(true);
 
   useEffect(() => {
-    if (!eventId) return;
-    getEvent(eventId).then(setEvent);
-  }, [eventId]);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const load = useCallback(
-    async (q: string) => {
+    async (q: string, { silent = false }: { silent?: boolean } = {}) => {
       if (!eventId) return;
-      const rows = await getAllEntries({ eventId, search: q ? normalize(q) : undefined });
-      setEntries(rows);
-
-      // Enrich with roster info so each row can show who was actually
-      // scanned, not just their number — one lookup per unique student.
-      // Normalize first: entries logged via OCR aren't guaranteed to be in
-      // the same exact form as the roster's student numbers, even though
-      // they refer to the same student.
-      const uniqueNumbers = Array.from(
-        new Set(rows.map((r) => normalize(r.studentNumber)))
-      );
-      const found = await Promise.all(
-        uniqueNumbers.map(async (sn) => [sn, await findStudent(sn)] as const)
-      );
-      const map: Record<string, RosterRow> = {};
-      for (const [sn, row] of found) {
-        if (!row) continue;
-        map[sn] = {
-          studentNumber: row.studentNumber,
-          name: row.name,
-          course: row.course,
-          yearLevel: row.yearLevel
-        };
+      const token = ++queryToken.current;
+      if (!silent) setLoading(true);
+      try {
+        const normalized = q ? normalize(q) : undefined;
+        const [rows, count, today] = await Promise.all([
+          getEntriesWithStudents({ eventId, search: normalized, limit: PAGE_SIZE, offset: 0 }),
+          countEntries({ eventId, search: normalized }),
+          countEntriesToday(eventId),
+        ]);
+        if (!mounted.current || token !== queryToken.current) return;
+        setEntries(rows);
+        setTotal(count);
+        setTodayCount(today);
+      } catch (err) {
+        log.error("couldn't load logs", { message: userMessage(err) });
+        if (mounted.current && token === queryToken.current) {
+          setNotice(`Couldn't load the log: ${userMessage(err)}`);
+        }
+      } finally {
+        if (mounted.current && token === queryToken.current) setLoading(false);
       }
-      setRoster(map);
     },
     [eventId]
   );
 
+  const loadMore = useCallback(async () => {
+    if (loadingMore || entries.length >= total) return;
+    const token = queryToken.current;
+    setLoadingMore(true);
+    try {
+      const rows = await getEntriesWithStudents({
+        eventId,
+        search: debouncedSearch ? normalize(debouncedSearch) : undefined,
+        limit: PAGE_SIZE,
+        offset: entries.length,
+      });
+      if (!mounted.current || token !== queryToken.current) return;
+      setEntries((prev) => [...prev, ...rows]);
+    } catch (err) {
+      log.warn("couldn't load more logs", { message: userMessage(err) });
+    } finally {
+      if (mounted.current) setLoadingMore(false);
+    }
+  }, [debouncedSearch, entries.length, eventId, loadingMore, total]);
+
   useFocusEffect(
     useCallback(() => {
-      load(search);
-    }, [load, search])
+      void load(debouncedSearch, { silent: true });
+    }, [load, debouncedSearch])
   );
 
   async function onRefresh() {
     setRefreshing(true);
-    await sync();
-    await load(search);
-    setRefreshing(false);
+    try {
+      await sync({ userInitiated: true });
+      await load(debouncedSearch, { silent: true });
+    } finally {
+      setRefreshing(false);
+    }
   }
 
-  const todayCount = entries.filter((e) => isToday(e.timestamp)).length;
-
   async function exportCsv() {
-    const rows = ["Student Number,Timestamp,Logged By,Synced"];
-    entries
-      .slice()
-      .sort(
-        (a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      )
-      .forEach((e) =>
-        rows.push(
-          `${e.studentNumber},${e.timestamp},${e.loggedBy || ""},${e.synced ? "yes" : "no"}`
-        )
-      );
-    const csv = rows.join("\n");
-    const slug = (event?.name || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const fileUri = `${FileSystem.cacheDirectory}${slug}-${new Date().toISOString().slice(0, 10)}.csv`;
-    await FileSystem.writeAsStringAsync(fileUri, csv, {
-      encoding: FileSystem.EncodingType.UTF8
-    });
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(fileUri, { mimeType: "text/csv" });
+    if (!eventId) return;
+    setNotice("");
+    try {
+      // Exports the whole event, not just the page currently rendered —
+      // the old version serialised `entries`, so anything not yet scrolled
+      // into view was silently missing from the file.
+      const rows = await getAllEntriesForExport(eventId);
+      if (!rows.length) {
+        setNotice("There's nothing to export yet.");
+        return;
+      }
+
+      const lines = ["Student Number,Name,Course,Year Level,Timestamp,Logged By,Synced"];
+      for (const e of rows) {
+        lines.push(
+          [
+            csvCell(e.studentNumber),
+            csvCell(e.studentName),
+            csvCell(e.studentCourse),
+            csvCell(e.studentYearLevel),
+            csvCell(e.timestamp),
+            csvCell(e.loggedBy),
+            e.synced ? "yes" : "no",
+          ].join(",")
+        );
+      }
+
+      const slug = (event?.name || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      // expo-file-system's legacy string-URI API (cacheDirectory,
+      // writeAsStringAsync, EncodingType) is gone in SDK 54 — this screen
+      // did not compile against it, so CSV export was dead on arrival.
+      const file = new File(Paths.cache, `${slug}-${new Date().toISOString().slice(0, 10)}.csv`);
+      if (file.exists) file.delete();
+      file.create();
+      file.write(lines.join("\n"));
+
+      if (!(await Sharing.isAvailableAsync())) {
+        setNotice("Sharing isn't available on this device.");
+        return;
+      }
+      await Sharing.shareAsync(file.uri, { mimeType: "text/csv", UTI: "public.comma-separated-values-text" });
+    } catch (err) {
+      log.error("csv export failed", { message: userMessage(err) });
+      setNotice(`Couldn't export: ${userMessage(err)}`);
     }
   }
 
@@ -116,31 +195,26 @@ export default function LogsScreen() {
 
         <TextInput
           style={styles.search}
-          placeholder="Search student number"
+          placeholder="Search number or name"
           placeholderTextColor={BRAND.smoke}
           autoCapitalize="characters"
+          autoCorrect={false}
           value={search}
-          onChangeText={(t) => {
-            setSearch(t);
-            load(t);
-          }}
+          onChangeText={setSearch}
         />
 
         <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={exportCsv}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={exportCsv} activeOpacity={0.85}>
             <Text style={styles.actionText}>Export CSV</Text>
           </TouchableOpacity>
         </View>
+
+        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       </View>
 
       <FlatList
         data={entries}
         keyExtractor={(item) => item.id}
-        extraData={roster}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -149,38 +223,66 @@ export default function LogsScreen() {
           />
         }
         contentContainerStyle={{ paddingBottom: 24 }}
-        renderItem={({ item }) => {
-          const info = roster[normalize(item.studentNumber)];
-          return (
-            <View style={styles.row}>
-              <View
-                style={[
-                  styles.statusBar,
-                  { backgroundColor: item.synced ? BRAND.green : BRAND.amber }
-                ]}
-              />
-              <View style={styles.rowBody}>
-                <Text style={styles.sn}>{item.studentNumber}</Text>
-                {info ? (
-                  <>
-                    <Text style={styles.name}>{info.name}</Text>
-                    <Text style={styles.meta}>
-                      {[info.course, info.yearLevel]
-                        .filter(Boolean)
-                        .join(" • ")}
-                    </Text>
-                  </>
-                ) : (
-                  <Text style={styles.notFound}>Not in roster</Text>
-                )}
-                <Text style={styles.time}>
-                  {fmtTimestamp(item.timestamp)} · {fmtRelative(item.timestamp)}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
+        // Keeps a long event's list cheap to scroll rather than holding
+        // every row mounted.
+        initialNumToRender={12}
+        windowSize={7}
+        removeClippedSubviews
+        renderItem={({ item }) => (
+          <View style={styles.row}>
+            <View
+              style={[
+                styles.statusBar,
+                {
+                  backgroundColor: item.dead
+                    ? BRAND.danger
+                    : item.synced
+                      ? BRAND.green
+                      : BRAND.amber,
+                },
+              ]}
+            />
+            <View style={styles.rowBody}>
+              <Text style={styles.sn}>{item.studentNumber}</Text>
+              {item.studentName ? (
+                <>
+                  <Text style={styles.name}>{item.studentName}</Text>
+                  <Text style={styles.meta}>
+                    {[item.studentCourse, item.studentYearLevel].filter(Boolean).join(" • ")}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.notFound}>Not in roster</Text>
+              )}
+              <Text style={styles.time}>
+                {fmtTimestamp(item.timestamp)} · {fmtRelative(item.timestamp)}
+              </Text>
+              {item.dead ? (
+                <Text style={styles.failed}>
+                  Upload failed: {item.lastError || "rejected by the server"}
                 </Text>
-              </View>
+              ) : null}
             </View>
-          );
-        }}
-        ListEmptyComponent={<Text style={styles.empty}>No entries yet.</Text>}
+          </View>
+        )}
+        ListFooterComponent={
+          loadingMore ? (
+            <ActivityIndicator style={styles.footer} color={BRAND.signal} />
+          ) : entries.length && entries.length >= total ? (
+            <Text style={styles.footerText}>All {total} entries shown</Text>
+          ) : null
+        }
+        ListEmptyComponent={
+          loading ? (
+            <ActivityIndicator style={styles.footer} color={BRAND.signal} />
+          ) : (
+            <Text style={styles.empty}>
+              {debouncedSearch ? "No entries match that search." : "No entries yet."}
+            </Text>
+          )
+        }
       />
     </View>
   );
@@ -195,13 +297,13 @@ const styles = StyleSheet.create({
     borderColor: BRAND.line,
     padding: 14,
     marginBottom: 14,
-    overflow: "hidden"
+    overflow: "hidden",
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 12
+    marginBottom: 12,
   },
   count: { color: BRAND.bone, fontSize: 18, fontWeight: "800" },
   subtle: { color: BRAND.smoke, fontSize: 12, marginTop: 2 },
@@ -214,7 +316,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: BRAND.line,
-    fontFamily: "SpaceMono"
+    fontFamily: "SpaceMono",
   },
   actionsRow: { flexDirection: "row", gap: 8 },
   actionButton: {
@@ -225,9 +327,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: BRAND.line
+    borderColor: BRAND.line,
   },
   actionText: { color: BRAND.bone, fontSize: 12, fontWeight: "700" },
+  notice: { color: BRAND.amber, fontSize: 12, marginTop: 10 },
   row: {
     flexDirection: "row",
     alignItems: "stretch",
@@ -236,7 +339,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: BRAND.line
+    borderColor: BRAND.line,
   },
   statusBar: { width: 4 },
   rowBody: { flex: 1, padding: 12 },
@@ -245,7 +348,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 1,
-    fontFamily: "SpaceMono"
+    fontFamily: "SpaceMono",
   },
   name: { color: BRAND.bone, fontSize: 15, fontWeight: "700", marginTop: 2 },
   meta: { color: BRAND.smoke, fontSize: 12, marginTop: 1 },
@@ -253,8 +356,11 @@ const styles = StyleSheet.create({
     color: BRAND.amber,
     fontSize: 12,
     marginTop: 2,
-    fontWeight: "600"
+    fontWeight: "600",
   },
   time: { color: BRAND.smoke, fontSize: 11, marginTop: 4 },
-  empty: { color: BRAND.smoke, textAlign: "center", marginTop: 40 }
+  failed: { color: BRAND.danger, fontSize: 11, marginTop: 4 },
+  footer: { marginTop: 16 },
+  footerText: { color: BRAND.smoke, fontSize: 11, textAlign: "center", marginTop: 12 },
+  empty: { color: BRAND.smoke, textAlign: "center", marginTop: 40 },
 });
