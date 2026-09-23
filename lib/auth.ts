@@ -97,7 +97,7 @@ function parseUser(raw: unknown): StaffUser | null {
  */
 const LOCAL_TOKEN_PREFIX = "local-dev:";
 
-function isLocalToken(token: string): boolean {
+export function isLocalToken(token: string): boolean {
   return token.startsWith(LOCAL_TOKEN_PREFIX);
 }
 

@@ -30,6 +30,9 @@ module.exports = defineConfig([
       // jest.mock() calls are hoisted and must be declared before the
       // imports of the modules they replace, so this rule can't apply.
       'import/first': 'off',
+      // Modules are re-required after jest.resetModules() to get fresh
+      // state (a new database, a new secure store), which import can't do.
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
 ]);

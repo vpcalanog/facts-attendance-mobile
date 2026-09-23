@@ -204,6 +204,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, [sync]);
 
   useEffect(() => {
+    // refreshCounts only sets state after awaiting the database, which the
+    // rule can't see; nothing here renders synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshCounts();
   }, [refreshCounts]);
 

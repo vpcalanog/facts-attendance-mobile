@@ -144,6 +144,60 @@ describe("locally created events", () => {
     await expect(db.getEvent(local.id)).resolves.toMatchObject({ id: "srv-77" });
   });
 
+  /**
+   * Pushing a scan whose event the server hasn't seen can only be
+   * refused, and five refusals dead-lettered it — so a slow or failing
+   * event push used to strand every scan taken at a new event.
+   */
+  it("holds scans back from the push until their event has a server id", async () => {
+    const local = await db.createEventLocal(EVENT_INPUT);
+    const scan = await db.insertAttendance({ studentNumber: "S2012345678", eventId: local.id });
+
+    await expect(db.getPendingEntries()).resolves.toHaveLength(0);
+    // Still counted as waiting, so the badge stays honest.
+    await expect(db.getPendingCount()).resolves.toBe(1);
+
+    await db.applyEventSyncResult([
+      { tempId: local.id, event: { id: "srv-77", name: "Orientation" } },
+    ]);
+    const pending = await db.getPendingEntries();
+    expect(pending.map((p) => [p.id, p.eventId])).toEqual([[scan.id, "srv-77"]]);
+  });
+
+  it("revives temp-event scans that were dead-lettered before reconciliation", async () => {
+    const local = await db.createEventLocal(EVENT_INPUT);
+    const scan = await db.insertAttendance({ studentNumber: "S2012345678", eventId: local.id });
+    for (let i = 0; i < db.MAX_PUSH_ATTEMPTS; i++) {
+      await db.markPushFailed([scan.id], "unknown event");
+    }
+    await expect(db.getFailedCount()).resolves.toBe(1);
+
+    await db.applyEventSyncResult([
+      { tempId: local.id, event: { id: "srv-77", name: "Orientation" } },
+    ]);
+
+    await expect(db.getFailedCount()).resolves.toBe(0);
+    await expect(db.getPendingEntries()).resolves.toHaveLength(1);
+  });
+
+  it("logs a scan against the real id when the screen still holds the temp one", async () => {
+    const { logAttendance } = require("@/lib/attendance") as typeof import("@/lib/attendance");
+    const local = await db.createEventLocal(EVENT_INPUT);
+    await db.applyEventSyncResult([
+      { tempId: local.id, event: { id: "srv-77", name: "Orientation" } },
+    ]);
+
+    const result = await logAttendance({
+      studentNumber: "S2012345678",
+      eventId: local.id,
+      officer: null,
+      officerCohort: null,
+    });
+
+    expect(result).toMatchObject({ status: "logged", row: { eventId: "srv-77" } });
+    await expect(db.getEntriesWithStudents({ eventId: "srv-77" })).resolves.toHaveLength(1);
+  });
+
   it("keeps an unpushed event queued so the next pass retries it", async () => {
     const local = await db.createEventLocal(EVENT_INPUT);
     await db.applyEventSyncResult([]);

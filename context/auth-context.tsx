@@ -2,6 +2,7 @@ import { setAuthFailureHandler } from "@/lib/api";
 import type { StaffUser } from "@/lib/auth";
 import * as authLib from "@/lib/auth";
 import { SERVER_URL } from "@/lib/config";
+import { DEV_ACCOUNTS } from "@/lib/dev-accounts";
 import { getMeta, initDb, resetLocalData, setMeta } from "@/lib/db";
 import { toAppError } from "@/lib/errors";
 import { log } from "@/lib/logger";
@@ -17,6 +18,7 @@ import React, {
 } from "react";
 
 const LAST_USER_KEY = "last_user_id";
+const LAST_USERNAME_KEY = "last_username";
 
 interface AuthContextValue {
   user: StaffUser | null;
@@ -44,14 +46,28 @@ const AuthContext = createContext<AuthContextValue | null>(null);
  * attendance queue, which would then upload under the new person's token.
  * Detect the switch and start clean.
  */
-async function handleAccountSwitch(user: StaffUser): Promise<void> {
+export async function handleAccountSwitch(user: StaffUser): Promise<void> {
   await initDb();
-  const previous = await getMeta(LAST_USER_KEY);
-  if (previous && previous !== user.id) {
+  const [previousId, previousUsername] = await Promise.all([
+    getMeta(LAST_USER_KEY),
+    getMeta(LAST_USERNAME_KEY),
+  ]);
+  const username = user.username.trim().toLowerCase();
+  // The same officer can arrive under two ids: a bundled account's
+  // `local-…` id while the server was down, then the server's own id. The
+  // username is what they share. Comparing ids alone treated that as a
+  // different person and erased every scan taken offline.
+  const sameAccount =
+    !previousId ||
+    previousId === user.id ||
+    previousUsername === username ||
+    DEV_ACCOUNTS.some((a) => a.id === previousId && a.username.toLowerCase() === username);
+  if (!sameAccount) {
     log.info("different account signing in; clearing local data");
     await resetLocalData();
   }
   await setMeta(LAST_USER_KEY, user.id);
+  await setMeta(LAST_USERNAME_KEY, username);
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

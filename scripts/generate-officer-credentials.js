@@ -333,9 +333,15 @@ export interface DevAccount {
 export const OFFLINE_AUTH_ENABLED: boolean =
   __DEV__ || process.env.EXPO_PUBLIC_OFFLINE_AUTH === "1";
 
-export const DEV_ACCOUNTS: DevAccount[] = [
+// The condition is repeated inline rather than read from OFFLINE_AUTH_ENABLED
+// so the minifier can fold it and drop the table from a release build.
+// Gating only its use, as before, still shipped every password.
+export const DEV_ACCOUNTS: DevAccount[] =
+  __DEV__ || process.env.EXPO_PUBLIC_OFFLINE_AUTH === "1"
+    ? [
 ${rows}
-];
+      ]
+    : [];
 
 /** Case-insensitive on the username, exact on the password. */
 export function findDevAccount(username: string, password: string): DevAccount | null {

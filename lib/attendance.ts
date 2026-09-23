@@ -1,5 +1,12 @@
 import type { StaffUser } from "./auth";
-import { AttendanceRow, findRecentDuplicate, findStudent, insertAttendance, RosterRow } from "./db";
+import {
+  AttendanceRow,
+  findRecentDuplicate,
+  findStudent,
+  insertAttendance,
+  resolveEventId,
+  RosterRow,
+} from "./db";
 import { isValidId } from "./extract";
 import { log } from "./logger";
 
@@ -95,6 +102,11 @@ export async function logAttendance({
   if (!eventId) {
     return { status: "blocked", reason: "invalid", message: "No event selected." };
   }
+  // A screen that stays open across a sync still holds the event's temp
+  // id after the server has assigned the real one. Writing against the
+  // temp id then would orphan the scan: its event row is gone, so it
+  // shows in no log and never uploads.
+  eventId = await resolveEventId(eventId);
 
   const student = await findStudent(studentNumber);
 

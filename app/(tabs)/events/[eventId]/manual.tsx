@@ -28,7 +28,10 @@ export default function ManualEntryScreen() {
   const { sync, refreshCounts } = useSync();
   const { cohort, status: cohortStatus } = useOfficerCohort();
   const [value, setValue] = useState("");
-  const [student, setStudent] = useState<RosterRow | null>(null);
+  const [lookup, setLookup] = useState<{ studentNumber: string; row: RosterRow | null } | null>(
+    null
+  );
+  const student = lookup?.studentNumber === value ? lookup.row : null;
   const [dupText, setDupText] = useState("");
   const [force, setForce] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -46,15 +49,13 @@ export default function ManualEntryScreen() {
   // for the button rather than after tapping it.
   const cohortBlock = checkOfficerCohortConflict(cohort, student);
 
+  // Keyed by number, so a lookup for an earlier keystroke never matches.
   useEffect(() => {
+    if (!isValidId(value)) return;
     let cancelled = false;
-    if (!isValidId(value)) {
-      setStudent(null);
-      return;
-    }
     void (async () => {
       const found = await findStudent(value);
-      if (!cancelled) setStudent(found);
+      if (!cancelled) setLookup({ studentNumber: value, row: found });
     })();
     return () => {
       cancelled = true;
@@ -113,7 +114,6 @@ export default function ManualEntryScreen() {
 
       showToast(`${value} logged at ${new Date().toLocaleTimeString()}`);
       setValue("");
-      setStudent(null);
       setForce(false);
       setDupText("");
       // The badge should reflect the queued entry immediately, not only

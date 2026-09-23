@@ -358,11 +358,20 @@ export async function revivePushFailures(): Promise<number> {
   return res.changes ?? 0;
 }
 
+/**
+ * Rows ready to upload. Scans against an event that hasn't reached the
+ * server yet are held back: the server can only refuse an event id it has
+ * never seen, and five refusals used to dead-letter the scans before the
+ * event push had a chance to succeed. applyEventSyncResult re-points them
+ * to the real id, which releases them here.
+ */
 export async function getPendingEntries(limit = 200): Promise<AttendanceRow[]> {
   const db = await getDb();
   return db.getAllAsync<AttendanceRow>(
     `SELECT id, student_number as studentNumber, event_id as eventId, timestamp, logged_by as loggedBy
-     FROM attendance WHERE synced = 0 AND dead = 0 ORDER BY created_at ASC LIMIT ?`,
+     FROM attendance
+     WHERE synced = 0 AND dead = 0 AND (event_id IS NULL OR event_id NOT LIKE 'tmp\\_%' ESCAPE '\\')
+     ORDER BY created_at ASC LIMIT ?`,
     [limit]
   );
 }
@@ -712,10 +721,16 @@ export async function applyEventSyncResult(
       if (!tempId || !event?.id) continue;
       await upsertEventRow(t, event, 1);
       if (tempId !== event.id) {
-        await t.runAsync(`UPDATE attendance SET event_id = ? WHERE event_id = ?`, [
-          event.id,
-          tempId,
-        ]);
+        // Also revives any that were dead-lettered for pointing at the
+        // temp id, from before such rows were held back from the push.
+        await t.runAsync(
+          `UPDATE attendance
+              SET event_id = ?,
+                  dead = CASE WHEN synced = 0 THEN 0 ELSE dead END,
+                  attempts = CASE WHEN synced = 0 THEN 0 ELSE attempts END
+            WHERE event_id = ?`,
+          [event.id, tempId]
+        );
         await t.runAsync(`DELETE FROM events WHERE id = ?`, [tempId]);
         await t.runAsync(
           `INSERT OR REPLACE INTO event_id_map (temp_id, real_id, created_at) VALUES (?, ?, ?)`,

@@ -1,7 +1,7 @@
 import { BRAND } from "@/constants/brand";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useSegments } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -69,11 +69,11 @@ function Satellite({
   const { dx, dy } = offsetFor(option.angle, SATELLITE_RADIUS);
   const style = useAnimatedStyle(() => ({
     transform: [
-      { translateX: dx * menuProgress.value },
-      { translateY: dy * menuProgress.value },
-      { scale: menuProgress.value },
+      { translateX: dx * menuProgress.get() },
+      { translateY: dy * menuProgress.get() },
+      { scale: menuProgress.get() },
     ],
-    opacity: menuProgress.value,
+    opacity: menuProgress.get(),
   }));
   return (
     <Animated.View
@@ -99,9 +99,6 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState<OptionKey | null>(null);
   const menuProgress = useSharedValue(0);
-  // onEnd fires before onFinalize; without this the menu was closed twice
-  // per gesture, the second time with no selection.
-  const settled = useRef(false);
 
   const navigateTo = useCallback(
     (key: OptionKey) => {
@@ -117,11 +114,13 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
     [activeKey, eventId, router]
   );
 
+  // Shared values are written with set() rather than `.value =`: the React
+  // Compiler treats assigning to a hook's return value as a mutation it
+  // cannot optimize around.
   const handleOpen = useCallback(() => {
-    settled.current = false;
     setOpen(true);
     setHighlighted(null);
-    menuProgress.value = withSpring(1, SPRING);
+    menuProgress.set(withSpring(1, SPRING));
   }, [menuProgress]);
 
   /**
@@ -134,9 +133,7 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
    */
   const handleRelease = useCallback(
     (dx: number, dy: number) => {
-      if (settled.current) return;
-      settled.current = true;
-      menuProgress.value = withSpring(0, SPRING);
+      menuProgress.set(withSpring(0, SPRING));
       setOpen(false);
       setHighlighted(null);
       const selected = pickOption(dx, dy);
@@ -146,9 +143,7 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
   );
 
   const handleCancel = useCallback(() => {
-    if (settled.current) return;
-    settled.current = true;
-    menuProgress.value = withSpring(0, SPRING);
+    menuProgress.set(withSpring(0, SPRING));
     setOpen(false);
     setHighlighted(null);
   }, [menuProgress]);
@@ -170,8 +165,11 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
     .onEnd((e) => {
       scheduleOnRN(handleRelease, e.translationX, e.translationY);
     })
-    .onFinalize(() => {
-      scheduleOnRN(handleCancel);
+    // onFinalize also follows a successful onEnd. Only an interrupted
+    // gesture needs closing here, or the menu is closed twice per gesture,
+    // the second time with no selection.
+    .onFinalize((_e, success) => {
+      if (!success) scheduleOnRN(handleCancel);
     });
 
   return (
@@ -208,7 +206,7 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
 
 const styles = StyleSheet.create({
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "flex-end",
     justifyContent: "flex-end",
     paddingBottom: ANCHOR_BOTTOM,

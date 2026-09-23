@@ -4,7 +4,7 @@ import type { Cohort } from "@/lib/attendance";
 import { findStudent } from "@/lib/db";
 import { toAppError } from "@/lib/errors";
 import { log } from "@/lib/logger";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 export type CohortStatus =
   /** No restriction applies — an administrator, or an account with no
@@ -32,65 +32,49 @@ export type CohortStatus =
 export function useOfficerCohort(): { cohort: Cohort | null; status: CohortStatus } {
   const { user } = useAuth();
   const { lastSyncAt } = useSync();
-  const [cohort, setCohort] = useState<Cohort | null>(null);
-  const [status, setStatus] = useState<CohortStatus>("unrestricted");
-  const mounted = useRef(true);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
+  // Only the roster lookup is state. Keyed by student number so a result
+  // for a previous account can never apply to the current one.
+  const [lookup, setLookup] = useState<{ studentNumber: string; cohort: Cohort | null } | null>(
+    null
+  );
 
   const course = user?.course ?? null;
   const yearLevel = user?.yearLevel ?? null;
   const studentNumber = user?.studentNumber ?? null;
+  const fromSession = !!(course && yearLevel);
 
   useEffect(() => {
+    if (fromSession || !studentNumber) return;
     let cancelled = false;
-
-    if (course && yearLevel) {
-      setCohort({ course, yearLevel });
-      setStatus("resolved");
-      return;
-    }
-
-    if (!studentNumber) {
-      // An admin account, or a server that sends neither. Unrestricted.
-      setCohort(null);
-      setStatus("unrestricted");
-      return;
-    }
 
     void (async () => {
       try {
         const row = await findStudent(studentNumber);
-        if (cancelled || !mounted.current) return;
-        if (row?.course && row?.yearLevel) {
-          setCohort({ course: row.course, yearLevel: row.yearLevel });
-          setStatus("resolved");
-        } else {
-          // Deliberately fails open rather than blocking every scan: an
-          // officer who can't check anyone in is worse than one relying
-          // on the server's copy of the same rule. The screens surface
-          // this state so it isn't silent.
-          setCohort(null);
-          setStatus("pending");
-        }
+        if (cancelled) return;
+        setLookup({
+          studentNumber,
+          cohort:
+            row?.course && row?.yearLevel ? { course: row.course, yearLevel: row.yearLevel } : null,
+        });
       } catch (err) {
         log.warn("couldn't resolve officer cohort", { message: toAppError(err).message });
-        if (!cancelled && mounted.current) {
-          setCohort(null);
-          setStatus("pending");
-        }
+        if (!cancelled) setLookup({ studentNumber, cohort: null });
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [course, yearLevel, studentNumber, lastSyncAt]);
+  }, [fromSession, studentNumber, lastSyncAt]);
 
-  return { cohort, status };
+  if (course && yearLevel) return { cohort: { course, yearLevel }, status: "resolved" };
+  // An admin account, or a server that sends neither. Unrestricted.
+  if (!studentNumber) return { cohort: null, status: "unrestricted" };
+
+  const cohort = lookup?.studentNumber === studentNumber ? lookup.cohort : null;
+  // No cohort yet deliberately fails open rather than blocking every scan:
+  // an officer who can't check anyone in is worse than one relying on the
+  // server's copy of the same rule. The screens surface this state so it
+  // isn't silent.
+  return { cohort, status: cohort ? "resolved" : "pending" };
 }

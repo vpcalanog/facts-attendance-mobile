@@ -32,7 +32,12 @@ export interface DevAccount {
 export const OFFLINE_AUTH_ENABLED: boolean =
   __DEV__ || process.env.EXPO_PUBLIC_OFFLINE_AUTH === "1";
 
-export const DEV_ACCOUNTS: DevAccount[] = [
+// The condition is repeated inline rather than read from OFFLINE_AUTH_ENABLED
+// so the minifier can fold it and drop the table from a release build.
+// Gating only its use, as before, still shipped every password.
+export const DEV_ACCOUNTS: DevAccount[] =
+  __DEV__ || process.env.EXPO_PUBLIC_OFFLINE_AUTH === "1"
+    ? [
   {"username":"jmonzor","password":"xT4FhL6x","id":"local-S2024101547","name":"Jessam Mae Dumpa Monzor","role":"officer","studentNumber":"S2024101547","course":"BSIT","yearLevel":"3rd Year"},
   {"username":"jcarandang","password":"cp27Sn6B","id":"local-S2024100023","name":"Jamie Pearl Unera Carandang","role":"officer","studentNumber":"S2024100023","course":"BSCS","yearLevel":"3rd Year"},
   {"username":"mcamat","password":"h3qPNMch","id":"local-S2025100092","name":"Mhica Claire Gutierrez Camat","role":"officer","studentNumber":"S2025100092","course":"BSEMC","yearLevel":"2nd Year"},
@@ -60,7 +65,8 @@ export const DEV_ACCOUNTS: DevAccount[] = [
   {"username":"iatienza","password":"EvRWDPru","id":"local-S2026100314","name":"Iya Dianne Atienza","role":"officer","studentNumber":"S2026100314","course":"BSIT","yearLevel":"1st Year"},
   {"username":"ksantiago","password":"ALrXazp7","id":"local-S2026100474","name":"Karyl Fay Valencia Santiago","role":"officer","studentNumber":"S2026100474","course":"BSCS","yearLevel":"1st Year"},
   {"username":"ldegarejo","password":"Z5XcDU6V","id":"local-S2026100628","name":"Lawrence Andrei Acasio De Garejo","role":"officer","studentNumber":"S2026100628","course":"BSEMC","yearLevel":"1st Year"},
-];
+      ]
+    : [];
 
 /** Case-insensitive on the username, exact on the password. */
 export function findDevAccount(username: string, password: string): DevAccount | null {

@@ -38,7 +38,10 @@ export default function ScanScreen() {
   const [resultValue, setResultValue] = useState("");
   const [resultRepaired, setResultRepaired] = useState(false);
   const [resultVisible, setResultVisible] = useState(false);
-  const [student, setStudent] = useState<RosterRow | null>(null);
+  const [lookup, setLookup] = useState<{ studentNumber: string; row: RosterRow | null } | null>(
+    null
+  );
+  const student = lookup?.studentNumber === resultValue ? lookup.row : null;
   const [dupWarning, setDupWarning] = useState<{ studentNumber: string; mins: number } | null>(
     null
   );
@@ -48,7 +51,9 @@ export default function ScanScreen() {
   const [viewfinderHeight, setViewfinderHeight] = useState(0);
 
   const cameraRef = useRef<CameraView>(null);
-  const scanAnim = useRef(new Animated.Value(0)).current;
+  // Lazy state rather than useRef(...).current, which reads a ref during
+  // render and opts the screen out of the React Compiler.
+  const [scanAnim] = useState(() => new Animated.Value(0));
   // Guards against a second tap landing before React has re-rendered with
   // the disabled state — the window in which two captures, two OCR
   // uploads or two attendance rows used to slip through.
@@ -84,15 +89,13 @@ export default function ScanScreen() {
 
   // Look the student up whenever the detected number changes, cancelling
   // any lookup still in flight so an older result can't overwrite a newer.
+  // The result is keyed by number, so a stale one simply doesn't match.
   useEffect(() => {
+    if (!isValidId(resultValue)) return;
     let cancelled = false;
-    if (!isValidId(resultValue)) {
-      setStudent(null);
-      return;
-    }
     void (async () => {
       const found = await findStudent(resultValue);
-      if (!cancelled) setStudent(found);
+      if (!cancelled) setLookup({ studentNumber: resultValue, row: found });
     })();
     return () => {
       cancelled = true;
@@ -176,7 +179,6 @@ export default function ScanScreen() {
     setResultVisible(false);
     setResultValue("");
     setResultRepaired(false);
-    setStudent(null);
     setDupWarning(null);
     setConfirmForce(false);
   }
@@ -441,7 +443,7 @@ const styles = StyleSheet.create({
     borderColor: BRAND.signal,
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(10,7,8,0.55)",
     overflow: "hidden",
   },
