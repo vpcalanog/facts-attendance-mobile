@@ -3,18 +3,14 @@ import StudentPreviewCard from "@/components/student-preview-card";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
-import {
-  checkEventEligibility,
-  EventRow,
-  findRecentDuplicate,
-  findStudent,
-  getEvent,
-  insertAttendance,
-  RosterRow,
-} from "@/lib/db";
+import { useEvent } from "@/hooks/use-event";
+import { useOfficerCohort } from "@/hooks/use-officer-cohort";
+import { checkOfficerCohortConflict, logAttendance } from "@/lib/attendance";
+import { checkEventEligibility, findStudent, RosterRow } from "@/lib/db";
+import { userMessage } from "@/lib/errors";
 import { isValidId, normalize } from "@/lib/extract";
-import { useLocalSearchParams } from "expo-router";
-import React, { useEffect, useState } from "react";
+import { log } from "@/lib/logger";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -24,95 +20,124 @@ import {
   View,
 } from "react-native";
 
-const DUP_WINDOW_MS = 5 * 60 * 1000;
+const TOAST_MS = 4000;
 
 export default function ManualEntryScreen() {
-  const { eventId } = useLocalSearchParams<{ eventId: string }>();
+  const { eventId, event } = useEvent();
   const { user } = useAuth();
-  const { sync } = useSync();
-  const [event, setEvent] = useState<EventRow | null>(null);
+  const { sync, refreshCounts } = useSync();
+  const { cohort, status: cohortStatus } = useOfficerCohort();
   const [value, setValue] = useState("");
-  const [student, setStudent] = useState<RosterRow | null>(null);
-  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(
-    null,
+  const [lookup, setLookup] = useState<{ studentNumber: string; row: RosterRow | null } | null>(
+    null
   );
+  const student = lookup?.studentNumber === value ? lookup.row : null;
   const [dupText, setDupText] = useState("");
   const [force, setForce] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [toast, setToast] = useState<{ text: string } | null>(null);
 
-  useEffect(() => {
-    if (!eventId) return;
-    getEvent(eventId).then(setEvent);
-  }, [eventId]);
+  const submitting = useRef(false);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Derived rather than stored, so it can't disagree with the event once
+  // a sync changes the event's course/year scoping.
+  const eligibilityWarning = event && student ? checkEventEligibility(event, student) : null;
+
+  // Evaluated as they type, so the refusal is visible before they reach
+  // for the button rather than after tapping it.
+  const cohortBlock = checkOfficerCohortConflict(cohort, student);
+
+  // Keyed by number, so a lookup for an earlier keystroke never matches.
   useEffect(() => {
+    if (!isValidId(value)) return;
     let cancelled = false;
-    (async () => {
-      if (!isValidId(value)) {
-        setStudent(null);
-        setEligibilityWarning(null);
-        return;
-      }
+    void (async () => {
       const found = await findStudent(value);
-      if (!cancelled) {
-        setStudent(found);
-        setEligibilityWarning(
-          event ? checkEventEligibility(event, found) : null,
-        );
-      }
+      if (!cancelled) setLookup({ studentNumber: value, row: found });
     })();
     return () => {
       cancelled = true;
     };
-  }, [value, event]);
+  }, [value]);
+
+  // The toast timer used to outlive the screen, firing setState on an
+  // unmounted component after a quick navigation away.
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
+
+  function showToast(text: string) {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ text });
+    toastTimer.current = setTimeout(() => setToast(null), TOAST_MS);
+  }
 
   function onChange(text: string) {
     setValue(normalize(text));
     setForce(false);
     setDupText("");
+    setError("");
   }
 
   async function handleConfirm() {
+    if (submitting.current) return;
     if (!eventId || !isValidId(value)) return;
-    if (!force) {
-      const dup = await findRecentDuplicate(value, DUP_WINDOW_MS, eventId);
-      if (dup) {
-        const mins = Math.max(
-          1,
-          Math.round((Date.now() - new Date(dup.timestamp).getTime()) / 60000),
-        );
-        setDupText(
-          `${value} was logged ${mins} min ago at this event. Tap "Log anyway" to log again.`,
-        );
+
+    submitting.current = true;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await logAttendance({
+        studentNumber: value,
+        eventId,
+        officer: user,
+        officerCohort: cohort,
+        force,
+      });
+
+      if (result.status === "blocked") {
+        // Not overridable — clear any pending "Log anyway" affordance.
+        setError(result.message);
+        setForce(false);
+        setDupText("");
+        return;
+      }
+      if (result.status === "needs-confirmation") {
+        setDupText(`${result.message} Tap "Log anyway" to log again.`);
         setForce(true);
         return;
       }
+
+      showToast(`${value} logged at ${new Date().toLocaleTimeString()}`);
+      setValue("");
+      setForce(false);
+      setDupText("");
+      // The badge should reflect the queued entry immediately, not only
+      // once the push that follows happens to succeed.
+      void refreshCounts();
+      void sync();
+    } catch (err) {
+      setError(`Couldn't save that entry: ${userMessage(err)}`);
+      log.error("failed to save manual entry", { message: userMessage(err) });
+    } finally {
+      submitting.current = false;
+      setSaving(false);
     }
-    await insertAttendance({
-      studentNumber: value,
-      eventId,
-      loggedBy: user?.username,
-    });
-    setToast({ text: `${value} logged at ${new Date().toLocaleTimeString()}` });
-    setValue("");
-    setStudent(null);
-    setEligibilityWarning(null);
-    setForce(false);
-    setDupText("");
-    sync();
-    setTimeout(() => setToast(null), 4000);
   }
 
+  const canSubmit = isValidId(value) && !saving && !cohortBlock;
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.card}>
         <CornerFlag size={22} />
         <Text style={styles.label}>Manual attendance entry</Text>
         <TextInput
-          style={[
-            styles.input,
-            value.length > 0 && !isValidId(value) && styles.inputInvalid,
-          ]}
+          style={[styles.input, value.length > 0 && !isValidId(value) && styles.inputInvalid]}
           maxLength={11}
           value={value}
           placeholder="S20XXXXXXXX"
@@ -123,21 +148,29 @@ export default function ManualEntryScreen() {
         />
         {value.length > 0 && (
           <Text
-            style={[
-              styles.validity,
-              isValidId(value) ? styles.validityOk : styles.validityBad,
-            ]}
+            style={[styles.validity, isValidId(value) ? styles.validityOk : styles.validityBad]}
           >
-            {isValidId(value)
-              ? "Valid format"
-              : "Expected format: S20 + 8 digits"}
+            {isValidId(value) ? "Valid format" : "Expected format: S20 + 8 digits"}
           </Text>
         )}
       </View>
 
-      {isValidId(value) && (
-        <StudentPreviewCard student={student} studentNumber={value} />
-      )}
+      {isValidId(value) && <StudentPreviewCard student={student} studentNumber={value} />}
+
+      {cohortBlock ? (
+        <View style={[styles.notice, styles.noticeBad]}>
+          <Text style={styles.noticeText}>{cohortBlock}</Text>
+        </View>
+      ) : null}
+
+      {cohortStatus === "pending" ? (
+        <View style={styles.notice}>
+          <Text style={styles.noticeText}>
+            Your course and year level haven&apos;t loaded yet, so the same-cohort check is
+            inactive on this device. Pull to refresh on the Logs tab once you&apos;re online.
+          </Text>
+        </View>
+      ) : null}
 
       {eligibilityWarning ? (
         <View style={styles.notice}>
@@ -148,6 +181,12 @@ export default function ManualEntryScreen() {
       {dupText ? (
         <View style={styles.notice}>
           <Text style={styles.noticeText}>{dupText}</Text>
+        </View>
+      ) : null}
+
+      {error ? (
+        <View style={[styles.notice, styles.noticeBad]}>
+          <Text style={styles.noticeText}>{error}</Text>
         </View>
       ) : null}
 
@@ -166,13 +205,13 @@ export default function ManualEntryScreen() {
           <Text style={styles.buttonTextDark}>Clear</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.button, !isValidId(value) && styles.buttonDisabled]}
-          disabled={!isValidId(value)}
+          style={[styles.button, !canSubmit && styles.buttonDisabled]}
+          disabled={!canSubmit}
           onPress={handleConfirm}
           activeOpacity={0.85}
         >
           <Text style={styles.buttonText}>
-            {force ? "Log anyway" : "Log attendance"}
+            {saving ? "Saving…" : force ? "Log anyway" : "Log attendance"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -209,6 +248,7 @@ const styles = StyleSheet.create({
   validityBad: { color: BRAND.danger },
   notice: { backgroundColor: BRAND.amberDim, padding: 10, borderRadius: 10 },
   noticeOk: { backgroundColor: BRAND.greenDim },
+  noticeBad: { backgroundColor: BRAND.crimsonDeep },
   noticeText: { color: BRAND.bone, fontSize: 13 },
   row: { flexDirection: "row", gap: 10 },
   button: {

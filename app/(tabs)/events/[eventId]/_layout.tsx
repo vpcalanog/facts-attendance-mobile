@@ -5,17 +5,38 @@ import { TouchableOpacity } from "react-native";
 
 import FloatingEventNav from "@/components/floating-event-nav";
 import { BRAND } from "@/constants/brand";
-import { EventRow, getEvent } from "@/lib/db";
+import { EventRow, getEvent, resolveEventId } from "@/lib/db";
+import { toAppError } from "@/lib/errors";
+import { log } from "@/lib/logger";
 
 export default function EventLayout() {
-  const { eventId } = useLocalSearchParams<{ eventId: string }>();
+  const params = useLocalSearchParams<{ eventId: string }>();
+  const routeId = typeof params.eventId === "string" ? params.eventId : "";
   const router = useRouter();
   const [event, setEvent] = useState<EventRow | null>(null);
+  // An event created offline is reached by a temporary id; once sync
+  // reconciles it the row is renamed, so follow the rename rather than
+  // leaving the nav pointing at an id that no longer exists.
+  const [resolvedId, setResolvedId] = useState(routeId);
 
   useEffect(() => {
-    if (!eventId) return;
-    getEvent(eventId).then(setEvent);
-  }, [eventId]);
+    let cancelled = false;
+    if (!routeId) return;
+    void (async () => {
+      try {
+        const id = await resolveEventId(routeId);
+        const row = await getEvent(id);
+        if (cancelled) return;
+        setResolvedId(id);
+        setEvent(row);
+      } catch (err) {
+        log.warn("couldn't load event for header", { message: toAppError(err).message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [routeId]);
 
   return (
     <>
@@ -54,7 +75,7 @@ export default function EventLayout() {
         <Stack.Screen name="logs" options={{ title: "Logs" }} />
       </Stack>
 
-      {eventId ? <FloatingEventNav eventId={eventId} /> : null}
+      {resolvedId ? <FloatingEventNav eventId={resolvedId} /> : null}
     </>
   );
 }

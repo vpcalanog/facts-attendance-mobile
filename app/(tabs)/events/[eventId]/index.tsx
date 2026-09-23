@@ -3,23 +3,16 @@ import StudentPreviewCard from "@/components/student-preview-card";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
-import { authFetch } from "@/lib/api";
-import {
-  checkEventEligibility,
-  EventRow,
-  findRecentDuplicate,
-  findStudent,
-  getEvent,
-  insertAttendance,
-  RosterRow,
-} from "@/lib/db";
-import { extractCandidate, isValidId } from "@/lib/extract";
-import {
-  CameraCapturedPicture,
-  CameraView,
-  useCameraPermissions,
-} from "expo-camera";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useEvent } from "@/hooks/use-event";
+import { useOfficerCohort } from "@/hooks/use-officer-cohort";
+import { checkOfficerCohortConflict, logAttendance } from "@/lib/attendance";
+import { checkEventEligibility, findStudent, RosterRow } from "@/lib/db";
+import { isCancelled, userMessage } from "@/lib/errors";
+import { isValidId } from "@/lib/extract";
+import { log } from "@/lib/logger";
+import { recognizeStudentNumber } from "@/lib/ocr";
+import { CameraCapturedPicture, CameraView, useCameraPermissions } from "expo-camera";
+import { useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -32,186 +25,207 @@ import {
   View,
 } from "react-native";
 
-const DUP_WINDOW_MS = 5 * 60 * 1000;
-
-interface OcrWord {
-  WordText?: string;
-}
-interface OcrLine {
-  Words?: OcrWord[];
-}
-
 export default function ScanScreen() {
-  const { eventId } = useLocalSearchParams<{ eventId: string }>();
+  const { eventId, event } = useEvent();
   const { user } = useAuth();
-  const { sync } = useSync();
-  const [event, setEvent] = useState<EventRow | null>(null);
+  const { sync, refreshCounts } = useSync();
+  const { cohort, status: cohortStatus } = useOfficerCohort();
   const [permission, requestPermission] = useCameraPermissions();
   const [cameraActive, setCameraActive] = useState(true);
+  const [cameraReady, setCameraReady] = useState(false);
   const [captured, setCaptured] = useState<CameraCapturedPicture | null>(null);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [resultValue, setResultValue] = useState("");
+  const [resultRepaired, setResultRepaired] = useState(false);
   const [resultVisible, setResultVisible] = useState(false);
-  const [student, setStudent] = useState<RosterRow | null>(null);
-  const [eligibilityWarning, setEligibilityWarning] = useState<string | null>(
-    null,
+  const [lookup, setLookup] = useState<{ studentNumber: string; row: RosterRow | null } | null>(
+    null
   );
-  const [dupWarning, setDupWarning] = useState<{
-    studentNumber: string;
-    mins: number;
-  } | null>(null);
+  const student = lookup?.studentNumber === resultValue ? lookup.row : null;
+  const [dupWarning, setDupWarning] = useState<{ studentNumber: string; mins: number } | null>(
+    null
+  );
   const [confirmForce, setConfirmForce] = useState(false);
-  const [toast, setToast] = useState<{
-    type: "success" | "warn";
-    text: string;
-  } | null>(null);
+  const [logging, setLogging] = useState(false);
+  const [toast, setToast] = useState<{ type: "success" | "warn"; text: string } | null>(null);
   const [viewfinderHeight, setViewfinderHeight] = useState(0);
-  const cameraRef = useRef<CameraView>(null);
-  const scanAnim = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    if (!eventId) return;
-    getEvent(eventId).then(setEvent);
-  }, [eventId]);
+  const cameraRef = useRef<CameraView>(null);
+  // Lazy state rather than useRef(...).current, which reads a ref during
+  // render and opts the screen out of the React Compiler.
+  const [scanAnim] = useState(() => new Animated.Value(0));
+  // Guards against a second tap landing before React has re-rendered with
+  // the disabled state — the window in which two captures, two OCR
+  // uploads or two attendance rows used to slip through.
+  const capturing = useRef(false);
+  const submitting = useRef(false);
+  const ocrAbort = useRef<AbortController | null>(null);
+
+  // Eligibility is derived, not stored. As stored state it went stale in
+  // two ways: it was computed inside the OCR handler from whatever
+  // `event` happened to be in that closure (null if the event hadn't
+  // loaded yet, silently skipping the check), and it never recomputed
+  // when a sync changed the event's course scoping.
+  const eligibilityWarning = event && student ? checkEventEligibility(event, student) : null;
+
+  // The conflict-of-interest rule. Shown as soon as the number resolves
+  // to a student, so the officer sees the refusal on the result card
+  // rather than discovering it after tapping Log.
+  const cohortBlock = checkOfficerCohortConflict(cohort, student);
 
   useEffect(() => {
     if (ocrLoading) {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(scanAnim, {
-            toValue: 1,
-            duration: 1200,
-            useNativeDriver: true,
-          }),
-          Animated.timing(scanAnim, {
-            toValue: 0,
-            duration: 1200,
-            useNativeDriver: true,
-          }),
-        ]),
+          Animated.timing(scanAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
+          Animated.timing(scanAnim, { toValue: 0, duration: 1200, useNativeDriver: true }),
+        ])
       ).start();
     } else {
+      scanAnim.stopAnimation();
       scanAnim.setValue(0);
     }
   }, [ocrLoading, scanAnim]);
 
+  // Look the student up whenever the detected number changes, cancelling
+  // any lookup still in flight so an older result can't overwrite a newer.
+  // The result is keyed by number, so a stale one simply doesn't match.
+  useEffect(() => {
+    if (!isValidId(resultValue)) return;
+    let cancelled = false;
+    void (async () => {
+      const found = await findStudent(resultValue);
+      if (!cancelled) setLookup({ studentNumber: resultValue, row: found });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resultValue]);
+
   useFocusEffect(
     useCallback(() => {
       setCameraActive(true);
-      return () => setCameraActive(false);
-    }, []),
+      return () => {
+        setCameraActive(false);
+        setCameraReady(false);
+        // Leaving the screen mid-upload: stop paying for a multi-megabyte
+        // image whose result nobody will see.
+        ocrAbort.current?.abort();
+      };
+    }, [])
   );
 
-  async function lookupStudent(sn: string) {
-    if (!isValidId(sn)) {
-      setStudent(null);
-      setEligibilityWarning(null);
-      return;
-    }
-    const found = await findStudent(sn);
-    setStudent(found);
-    setEligibilityWarning(event ? checkEventEligibility(event, found) : null);
-  }
+  useEffect(() => () => ocrAbort.current?.abort(), []);
 
   async function captureAndScan() {
-    if (!cameraRef.current) return;
+    if (capturing.current || !cameraRef.current || !cameraReady) return;
+    capturing.current = true;
+
     setDupWarning(null);
     setConfirmForce(false);
     setToast(null);
     setResultVisible(false);
 
-    const photo = await cameraRef.current.takePictureAsync({
-      base64: true,
-      quality: 0.5,
-    });
-    if (!photo) return;
-    setCaptured(photo);
-    setOcrLoading(true);
+    const controller = new AbortController();
+    ocrAbort.current = controller;
 
     try {
-      const data = await authFetch("/api/ocr", {
-        method: "POST",
-        body: JSON.stringify({
-          imageBase64: `data:image/jpeg;base64,${photo.base64}`,
-        }),
-      });
-
-      const lines: OcrLine[] = data.lines || [];
-      let candidate = "";
-      outerWordLoop: for (const line of lines) {
-        for (const w of line.Words || []) {
-          const c = extractCandidate(w.WordText || "");
-          if (c) {
-            candidate = c;
-            break outerWordLoop;
-          }
-        }
+      // takePictureAsync used to sit outside the try block, so a camera
+      // that wasn't ready rejected into an unhandled promise and the
+      // screen simply did nothing.
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+      if (!photo?.base64) {
+        setToast({ type: "warn", text: "Couldn't capture the photo. Try again." });
+        return;
       }
-      if (!candidate) {
-        for (const line of lines) {
-          const c = extractCandidate(
-            (line.Words || []).map((w) => w.WordText).join(" "),
-          );
-          if (c) {
-            candidate = c;
-            break;
-          }
-        }
-      }
-      if (!candidate) candidate = extractCandidate(data.text || "");
+      setCaptured(photo);
+      setOcrLoading(true);
 
-      setResultValue(candidate);
-      await lookupStudent(candidate);
-    } catch (err: any) {
+      // Tries the barcode on the card, then the server, then an
+      // on-device engine if one is registered — so a dead tunnel or no
+      // signal no longer stops scanning outright.
+      const result = await recognizeStudentNumber(
+        { base64: photo.base64 },
+        { signal: controller.signal }
+      );
+
+      if (controller.signal.aborted) return;
+      setResultValue(result.studentNumber);
+      setResultRepaired(result.repaired);
+      setResultVisible(true);
+      if (result.failure) {
+        setToast({ type: "warn", text: result.failure });
+      }
+    } catch (err) {
+      if (isCancelled(err)) return;
+      log.warn("recognition failed", { message: userMessage(err) });
+      setResultValue("");
+      setResultRepaired(false);
+      setResultVisible(true);
       setToast({
         type: "warn",
-        text:
-          err?.message || "OCR request failed — try the Manual tab instead.",
+        text: `${userMessage(err)} You can still use the Manual tab.`,
       });
-      setResultValue("");
     } finally {
+      capturing.current = false;
+      if (ocrAbort.current === controller) ocrAbort.current = null;
       setOcrLoading(false);
-      setResultVisible(true);
     }
   }
 
   function retake() {
+    ocrAbort.current?.abort();
     setCaptured(null);
     setResultVisible(false);
     setResultValue("");
-    setStudent(null);
-    setEligibilityWarning(null);
+    setResultRepaired(false);
     setDupWarning(null);
     setConfirmForce(false);
   }
 
   async function handleConfirm() {
+    if (submitting.current) return;
     if (!eventId) return;
     const sn = resultValue;
     if (!isValidId(sn)) return;
-    if (!confirmForce) {
-      const dup = await findRecentDuplicate(sn, DUP_WINDOW_MS, eventId);
-      if (dup) {
-        const mins = Math.max(
-          1,
-          Math.round((Date.now() - new Date(dup.timestamp).getTime()) / 60000),
-        );
-        setDupWarning({ studentNumber: sn, mins });
+
+    submitting.current = true;
+    setLogging(true);
+    try {
+      const result = await logAttendance({
+        studentNumber: sn,
+        eventId,
+        officer: user,
+        officerCohort: cohort,
+        force: confirmForce,
+      });
+
+      if (result.status === "blocked") {
+        // Not overridable — withdraw any "Log anyway" affordance.
+        setConfirmForce(false);
+        setDupWarning(null);
+        setToast({ type: "warn", text: result.message });
+        return;
+      }
+      if (result.status === "needs-confirmation") {
+        setDupWarning({ studentNumber: sn, mins: result.minutesAgo });
         setConfirmForce(true);
         return;
       }
+
+      setToast({ type: "success", text: `${sn} logged at ${new Date().toLocaleTimeString()}` });
+      retake();
+      // Update the badge straight away: the entry is queued whether or not
+      // the push that follows succeeds.
+      void refreshCounts();
+      void sync();
+    } catch (err) {
+      setToast({ type: "warn", text: `Couldn't save that scan: ${userMessage(err)}` });
+      log.error("failed to save scan", { message: userMessage(err) });
+    } finally {
+      submitting.current = false;
+      setLogging(false);
     }
-    await insertAttendance({
-      studentNumber: sn,
-      eventId,
-      loggedBy: user?.username,
-    });
-    setToast({
-      type: "success",
-      text: `${sn} logged at ${new Date().toLocaleTimeString()}`,
-    });
-    retake();
-    sync();
   }
 
   const translateY = scanAnim.interpolate({
@@ -230,19 +244,15 @@ export default function ScanScreen() {
   if (!permission.granted) {
     return (
       <View style={styles.center}>
-        <Text style={styles.permText}>
-          Camera access is needed to scan student IDs.
-        </Text>
-        <TouchableOpacity
-          style={styles.button}
-          onPress={requestPermission}
-          activeOpacity={0.85}
-        >
+        <Text style={styles.permText}>Camera access is needed to scan student IDs.</Text>
+        <TouchableOpacity style={styles.button} onPress={requestPermission} activeOpacity={0.85}>
           <Text style={styles.buttonText}>Grant camera access</Text>
         </TouchableOpacity>
       </View>
     );
   }
+
+  const canLog = isValidId(resultValue) && !logging && !cohortBlock;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -253,13 +263,14 @@ export default function ScanScreen() {
         }}
       >
         {captured ? (
-          <Image
-            source={{ uri: captured.uri }}
-            style={styles.preview}
-            resizeMode="contain"
-          />
+          <Image source={{ uri: captured.uri }} style={styles.preview} resizeMode="contain" />
         ) : cameraActive ? (
-          <CameraView ref={cameraRef} style={styles.preview} facing="back" />
+          <CameraView
+            ref={cameraRef}
+            style={styles.preview}
+            facing="back"
+            onCameraReady={() => setCameraReady(true)}
+          />
         ) : null}
 
         <View style={[styles.bracket, styles.bracketTL]} pointerEvents="none" />
@@ -269,29 +280,35 @@ export default function ScanScreen() {
 
         {ocrLoading && (
           <View style={styles.loadingOverlay}>
-            <Animated.View
-              style={[styles.scanBar, { transform: [{ translateY }] }]}
-            />
+            <Animated.View style={[styles.scanBar, { transform: [{ translateY }] }]} />
           </View>
         )}
       </View>
 
       {!captured && (
         <TouchableOpacity
-          style={styles.button}
+          style={[styles.button, !cameraReady && styles.buttonDisabled]}
           onPress={captureAndScan}
+          disabled={!cameraReady}
           activeOpacity={0.85}
         >
-          <Text style={styles.buttonText}>Scan ID</Text>
+          <Text style={styles.buttonText}>{cameraReady ? "Scan ID" : "Starting camera…"}</Text>
+        </TouchableOpacity>
+      )}
+
+      {ocrLoading && (
+        <TouchableOpacity
+          style={[styles.button, styles.secondaryButton]}
+          onPress={retake}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.buttonTextDark}>Cancel</Text>
         </TouchableOpacity>
       )}
 
       {toast && (
         <View
-          style={[
-            styles.notice,
-            toast.type === "success" ? styles.noticeOk : styles.noticeWarn,
-          ]}
+          style={[styles.notice, toast.type === "success" ? styles.noticeOk : styles.noticeWarn]}
         >
           <Text style={styles.noticeText}>{toast.text}</Text>
         </View>
@@ -307,7 +324,31 @@ export default function ScanScreen() {
           </Text>
           <Text style={styles.resultValue}>{resultValue || "—"}</Text>
 
+          {resultRepaired && (
+            <View style={[styles.notice, styles.noticeWarn]}>
+              <Text style={styles.noticeText}>
+                Some characters were unclear and had to be corrected (O/0, I/1, B/8). Check
+                this against the card before logging it.
+              </Text>
+            </View>
+          )}
+
           <StudentPreviewCard student={student} studentNumber={resultValue} />
+
+          {cohortBlock && (
+            <View style={[styles.notice, styles.noticeBlocked]}>
+              <Text style={styles.noticeText}>{cohortBlock}</Text>
+            </View>
+          )}
+
+          {cohortStatus === "pending" && (
+            <View style={[styles.notice, styles.noticeWarn]}>
+              <Text style={styles.noticeText}>
+                Your course and year level haven&apos;t loaded yet, so the same-cohort check
+                is inactive on this device.
+              </Text>
+            </View>
+          )}
 
           {eligibilityWarning && (
             <View style={[styles.notice, styles.noticeWarn]}>
@@ -318,8 +359,8 @@ export default function ScanScreen() {
           {dupWarning && (
             <View style={[styles.notice, styles.noticeWarn]}>
               <Text style={styles.noticeText}>
-                {dupWarning.studentNumber} was already logged {dupWarning.mins}{" "}
-                min ago at this event. Tap "Log anyway" to confirm.
+                {dupWarning.studentNumber} was already logged {dupWarning.mins} min ago at this
+                event. Tap &quot;Log anyway&quot; to confirm.
               </Text>
             </View>
           )}
@@ -333,16 +374,13 @@ export default function ScanScreen() {
               <Text style={styles.buttonTextDark}>Retake</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[
-                styles.button,
-                !isValidId(resultValue) && styles.buttonDisabled,
-              ]}
-              disabled={!isValidId(resultValue)}
+              style={[styles.button, !canLog && styles.buttonDisabled]}
+              disabled={!canLog}
               onPress={handleConfirm}
               activeOpacity={0.85}
             >
               <Text style={styles.buttonText}>
-                {confirmForce ? "Log anyway" : "Log attendance"}
+                {logging ? "Saving…" : confirmForce ? "Log anyway" : "Log attendance"}
               </Text>
             </TouchableOpacity>
           </View>
@@ -405,7 +443,7 @@ const styles = StyleSheet.create({
     borderColor: BRAND.signal,
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(10,7,8,0.55)",
     overflow: "hidden",
   },
@@ -454,7 +492,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 12,
   },
-  row: { flexDirection: "row", gap: 20, marginTop: 12 },
   resultCard: {
     backgroundColor: BRAND.surface,
     borderRadius: 14,
@@ -475,5 +512,6 @@ const styles = StyleSheet.create({
   notice: { padding: 10, borderRadius: 10, marginTop: 10 },
   noticeOk: { backgroundColor: BRAND.greenDim },
   noticeWarn: { backgroundColor: BRAND.amberDim },
+  noticeBlocked: { backgroundColor: BRAND.crimsonDeep },
   noticeText: { color: BRAND.bone, fontSize: 13 },
 });

@@ -1,12 +1,16 @@
+import SyncStatusBadge from "@/components/sync-status-badge";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
 import { EventRow, getEvents } from "@/lib/db";
+import { userMessage } from "@/lib/errors";
 import { fmtTimestamp } from "@/lib/format";
+import { log } from "@/lib/logger";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -17,31 +21,59 @@ import {
 
 export default function EventsScreen() {
   const { user } = useAuth();
-  const { sync } = useSync();
+  const { sync, dbReady, dbError, lastSyncError, online } = useSync();
   const router = useRouter();
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const mounted = useRef(true);
 
   // ASSUMPTION: role === "admin" gates event creation. Adjust this if
   // your backend uses a different role string.
   const isAdmin = user?.role === "admin";
 
-  const load = useCallback(async () => {
-    setEvents(await getEvents());
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
   }, []);
+
+  const load = useCallback(async () => {
+    if (!dbReady) return;
+    try {
+      const rows = await getEvents();
+      if (!mounted.current) return;
+      setEvents(rows);
+      setLoadError("");
+    } catch (err) {
+      log.error("couldn't load events", { message: userMessage(err) });
+      if (mounted.current) setLoadError(userMessage(err));
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [dbReady]);
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load]),
+      void load();
+    }, [load])
   );
 
   async function onRefresh() {
     setRefreshing(true);
-    await sync({ forceEvents: true });
-    await load();
-    setRefreshing(false);
+    try {
+      // userInitiated so a manual pull always tries the server, even if
+      // the engine is currently backing off after repeated failures.
+      await sync({ forceEvents: true, userInitiated: true });
+      await load();
+    } finally {
+      if (mounted.current) setRefreshing(false);
+    }
   }
+
+  const problem = dbError || loadError;
 
   return (
     <View style={styles.container}>
@@ -59,18 +91,33 @@ export default function EventsScreen() {
             </TouchableOpacity>
           )}
         </View>
+        <View style={styles.statusRow}>
+          <SyncStatusBadge />
+        </View>
       </View>
+
+      {problem ? (
+        <View style={styles.banner}>
+          <Text style={styles.bannerText}>{problem}</Text>
+        </View>
+      ) : !online ? (
+        <View style={styles.banner}>
+          <Text style={styles.bannerText}>
+            Offline — showing the events saved on this device. Scans still work.
+          </Text>
+        </View>
+      ) : lastSyncError ? (
+        <View style={styles.banner}>
+          <Text style={styles.bannerText}>{lastSyncError} Pull down to retry.</Text>
+        </View>
+      ) : null}
 
       <FlatList
         data={events}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingBottom: 24 }}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={BRAND.signal}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND.signal} />
         }
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -79,12 +126,15 @@ export default function EventsScreen() {
             onPress={() => router.push(`/events/${item.id}`)}
           >
             <Text style={styles.name}>{item.name}</Text>
+            {item.description ? (
+              <Text style={styles.description} numberOfLines={2}>
+                {item.description}
+              </Text>
+            ) : null}
             {item.startsAt ? (
               <Text style={styles.meta}>{fmtTimestamp(item.startsAt)}</Text>
             ) : null}
-            {item.synced === 0 && (
-              <Text style={styles.pendingTag}>Not yet synced</Text>
-            )}
+            {item.synced === 0 && <Text style={styles.pendingTag}>Not yet synced</Text>}
             {(item.courses.length > 0 || item.yearLevels.length > 0) && (
               <View style={styles.tags}>
                 {item.courses.map((c) => (
@@ -102,11 +152,13 @@ export default function EventsScreen() {
           </TouchableOpacity>
         )}
         ListEmptyComponent={
-          <Text style={styles.empty}>
-            {isAdmin
-              ? "No events yet — tap New to create one."
-              : "No events yet."}
-          </Text>
+          loading ? (
+            <ActivityIndicator style={{ marginTop: 40 }} color={BRAND.signal} />
+          ) : (
+            <Text style={styles.empty}>
+              {isAdmin ? "No events yet — tap New to create one." : "No events yet."}
+            </Text>
+          )
         }
       />
     </View>
@@ -121,6 +173,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  statusRow: { marginTop: 8 },
   title: { color: BRAND.bone, fontSize: 22, fontWeight: "800" },
   newButton: {
     flexDirection: "row",
@@ -132,6 +185,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   newButtonText: { color: BRAND.void, fontWeight: "800", fontSize: 13 },
+  banner: {
+    backgroundColor: BRAND.amberDim,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
+  bannerText: { color: BRAND.bone, fontSize: 12 },
   card: {
     backgroundColor: BRAND.surface,
     borderRadius: 12,
@@ -141,6 +201,7 @@ const styles = StyleSheet.create({
     borderColor: BRAND.line,
   },
   name: { color: BRAND.bone, fontSize: 16, fontWeight: "700" },
+  description: { color: BRAND.smoke, fontSize: 13, marginTop: 4 },
   meta: { color: BRAND.smoke, fontSize: 12, marginTop: 4 },
   pendingTag: {
     color: BRAND.amber,

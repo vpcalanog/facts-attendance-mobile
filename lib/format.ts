@@ -1,5 +1,21 @@
+// Timestamps arrive from three places — this device, another device via
+// the server, and the server itself — so a malformed one is a real
+// possibility. Without these guards a bad value rendered as "NaNm ago"
+// and "Invalid Date" in the middle of the log.
+
+function parse(iso: string): Date | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function fmtRelative(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
+  const d = parse(iso);
+  if (!d) return "unknown time";
+  const diffMs = Date.now() - d.getTime();
+  // A timestamp from the future (clock skew between devices) reads oddly
+  // as a negative age; treat anything within a minute either way as now.
+  if (diffMs < 0) return "just now";
   const mins = Math.round(diffMs / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
@@ -10,15 +26,24 @@ export function fmtRelative(iso: string): string {
 }
 
 export function fmtTimestamp(iso: string): string {
-  const d = new Date(iso);
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} · ${d.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  })}`;
+  const d = parse(iso);
+  if (!d) return "—";
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} · ${d.toLocaleTimeString(
+    [],
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  )}`;
 }
 
 export function isToday(iso: string): boolean {
-  const d = new Date(iso);
+  const d = parse(iso);
+  if (!d) return false;
   const t = new Date();
-  return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
+  return (
+    d.getFullYear() === t.getFullYear() &&
+    d.getMonth() === t.getMonth() &&
+    d.getDate() === t.getDate()
+  );
 }

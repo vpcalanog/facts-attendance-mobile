@@ -1,16 +1,17 @@
 import { BRAND } from "@/constants/brand";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useSegments } from "expo-router";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
-  runOnJS,
   SharedValue,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
 } from "react-native-reanimated";
+// Reanimated 4 deprecates runOnJS in favour of worklets' scheduleOnRN.
+import { scheduleOnRN } from "react-native-worklets";
 
 const BUTTON_SIZE = 58;
 const SATELLITE_SIZE = 52;
@@ -34,9 +35,26 @@ const OPTIONS: {
   { key: "logs", label: "Logs", icon: "list", angle: -90 },
 ];
 
+const SPRING = { damping: 20, stiffness: 90, mass: 1, overshootClamping: true };
+
 function offsetFor(angleDeg: number, radius: number) {
   const rad = (angleDeg * Math.PI) / 180;
   return { dx: Math.cos(rad) * radius, dy: Math.sin(rad) * radius };
+}
+
+/** Which satellite, if any, the finger is currently over. */
+function pickOption(dx: number, dy: number): OptionKey | null {
+  let closest: OptionKey | null = null;
+  let closestDist = HIT_RADIUS;
+  for (const opt of OPTIONS) {
+    const target = offsetFor(opt.angle, SATELLITE_RADIUS);
+    const dist = Math.hypot(dx - target.dx, dy - target.dy);
+    if (dist < closestDist) {
+      closestDist = dist;
+      closest = opt.key;
+    }
+  }
+  return closest;
 }
 
 function Satellite({
@@ -51,11 +69,11 @@ function Satellite({
   const { dx, dy } = offsetFor(option.angle, SATELLITE_RADIUS);
   const style = useAnimatedStyle(() => ({
     transform: [
-      { translateX: dx * menuProgress.value },
-      { translateY: dy * menuProgress.value },
-      { scale: menuProgress.value },
+      { translateX: dx * menuProgress.get() },
+      { translateY: dy * menuProgress.get() },
+      { scale: menuProgress.get() },
     ],
-    opacity: menuProgress.value,
+    opacity: menuProgress.get(),
   }));
   return (
     <Animated.View
@@ -82,66 +100,76 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
   const [highlighted, setHighlighted] = useState<OptionKey | null>(null);
   const menuProgress = useSharedValue(0);
 
-  function navigateTo(key: OptionKey) {
-    if (key === activeKey) return;
+  const navigateTo = useCallback(
+    (key: OptionKey) => {
+      if (key === activeKey) return;
+      if (key === "index") {
+        router.replace({ pathname: "/events/[eventId]", params: { eventId } });
+      } else if (key === "manual") {
+        router.replace({ pathname: "/events/[eventId]/manual", params: { eventId } });
+      } else {
+        router.replace({ pathname: "/events/[eventId]/logs", params: { eventId } });
+      }
+    },
+    [activeKey, eventId, router]
+  );
 
-    const path =
-      key === "index" ? `/events/${eventId}` : `/events/${eventId}/${key}`;
-
-    // @ts-ignore
-    router.replace(path);
-  }
-
-  function handleOpen() {
+  // Shared values are written with set() rather than `.value =`: the React
+  // Compiler treats assigning to a hook's return value as a mutation it
+  // cannot optimize around.
+  const handleOpen = useCallback(() => {
     setOpen(true);
     setHighlighted(null);
-    menuProgress.value = withSpring(1, {
-      damping: 20,
-      stiffness: 90,
-      mass: 1,
-      overshootClamping: true,
-    });
-  }
+    menuProgress.set(withSpring(1, SPRING));
+  }, [menuProgress]);
 
-  function handleClose(selected: OptionKey | null) {
-    menuProgress.value = withSpring(0, {
-      damping: 20,
-      stiffness: 90,
-      mass: 1,
-      overshootClamping: true,
-    });
+  /**
+   * Resolves the selection from the gesture's own final coordinates.
+   *
+   * The previous version read a `highlighted` React state value captured
+   * in the closure that built the gesture, so the release usually acted
+   * on whatever was highlighted one render earlier — picking the wrong
+   * destination, or none at all.
+   */
+  const handleRelease = useCallback(
+    (dx: number, dy: number) => {
+      menuProgress.set(withSpring(0, SPRING));
+      setOpen(false);
+      setHighlighted(null);
+      const selected = pickOption(dx, dy);
+      if (selected) navigateTo(selected);
+    },
+    [menuProgress, navigateTo]
+  );
+
+  const handleCancel = useCallback(() => {
+    menuProgress.set(withSpring(0, SPRING));
     setOpen(false);
     setHighlighted(null);
-    if (selected) navigateTo(selected);
-  }
+  }, [menuProgress]);
 
-  function updateHighlight(dx: number, dy: number) {
-    let closest: OptionKey | null = null;
-    let closestDist = HIT_RADIUS;
-    for (const opt of OPTIONS) {
-      const target = offsetFor(opt.angle, SATELLITE_RADIUS);
-      const dist = Math.hypot(dx - target.dx, dy - target.dy);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closest = opt.key;
-      }
-    }
-    setHighlighted(closest);
-  }
+  // Only crosses to the JS thread when the highlight actually changes,
+  // rather than on every pointer sample.
+  const updateHighlight = useCallback((key: OptionKey | null) => {
+    setHighlighted((prev) => (prev === key ? prev : key));
+  }, []);
 
   const panGesture = Gesture.Pan()
     .activateAfterLongPress(HOLD_MS)
     .onStart(() => {
-      runOnJS(handleOpen)();
+      scheduleOnRN(handleOpen);
     })
     .onUpdate((e) => {
-      runOnJS(updateHighlight)(e.translationX, e.translationY);
+      scheduleOnRN(updateHighlight, pickOption(e.translationX, e.translationY));
     })
-    .onEnd(() => {
-      runOnJS(handleClose)(highlighted);
+    .onEnd((e) => {
+      scheduleOnRN(handleRelease, e.translationX, e.translationY);
     })
-    .onFinalize(() => {
-      runOnJS(handleClose)(null);
+    // onFinalize also follows a successful onEnd. Only an interrupted
+    // gesture needs closing here, or the menu is closed twice per gesture,
+    // the second time with no selection.
+    .onFinalize((_e, success) => {
+      if (!success) scheduleOnRN(handleCancel);
     });
 
   return (
@@ -178,7 +206,7 @@ export default function FloatingEventNav({ eventId }: { eventId: string }) {
 
 const styles = StyleSheet.create({
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "flex-end",
     justifyContent: "flex-end",
     paddingBottom: ANCHOR_BOTTOM,

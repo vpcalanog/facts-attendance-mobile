@@ -1,7 +1,8 @@
 import LogoMark from "@/components/logo-mark";
 import { BRAND } from "@/constants/brand";
 import { useAuth } from "@/context/auth-context";
-import React, { useState } from "react";
+import { userMessage } from "@/lib/errors";
+import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -14,18 +15,24 @@ import {
 } from "react-native";
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, signedOutReason, clearSignedOutReason } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // `loading` alone can't stop a fast double tap: it only takes effect on
+  // the next render, so both taps get past the check and fire two
+  // sign-in requests.
+  const submitting = useRef(false);
 
   async function handleLogin() {
+    if (submitting.current) return;
     setError("");
     if (!username.trim() || !password) {
       setError("Username and password are required.");
       return;
     }
+    submitting.current = true;
     setLoading(true);
     try {
       await login({
@@ -34,11 +41,21 @@ export default function LoginScreen() {
       });
       // No manual navigation needed — Stack.Protected in app/_layout.tsx
       // re-evaluates as soon as `user` changes and swaps to (tabs) itself.
-    } catch (err: any) {
-      setError(err?.message || "Login failed.");
+    } catch (err) {
+      setError(userMessage(err));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
+  }
+
+  function onEdit(setter: (v: string) => void) {
+    return (text: string) => {
+      // Once they start typing, the "your session expired" banner has
+      // served its purpose.
+      if (signedOutReason) clearSignedOutReason();
+      setter(text);
+    };
   }
 
   return (
@@ -85,6 +102,12 @@ export default function LoginScreen() {
         <View style={styles.card}>
           <Text style={styles.subtitle}>Sign in</Text>
 
+          {signedOutReason ? (
+            <View style={styles.banner}>
+              <Text style={styles.bannerText}>{signedOutReason}</Text>
+            </View>
+          ) : null}
+
           <Text style={styles.label}>Username</Text>
           <TextInput
             style={styles.input}
@@ -93,7 +116,7 @@ export default function LoginScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             value={username}
-            onChangeText={setUsername}
+            onChangeText={onEdit(setUsername)}
           />
 
           <Text style={styles.label}>Password</Text>
@@ -103,7 +126,7 @@ export default function LoginScreen() {
             placeholderTextColor={BRAND.smoke}
             secureTextEntry
             value={password}
-            onChangeText={setPassword}
+            onChangeText={onEdit(setPassword)}
           />
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -191,6 +214,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   error: { color: BRAND.danger, marginTop: 14, fontSize: 13 },
+  banner: {
+    backgroundColor: BRAND.amberDim,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 6,
+  },
+  bannerText: { color: BRAND.bone, fontSize: 13 },
   button: {
     backgroundColor: BRAND.signal,
     borderRadius: 10,
