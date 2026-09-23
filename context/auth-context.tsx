@@ -158,6 +158,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setAuthFailureHandler(null);
   }, [endSession]);
 
+  // A built-in account signed in offline is swapped for a server session
+  // the first time the sync engine reaches the server. Show that account
+  // from then on; it has the same username, so no local data is cleared.
+  useEffect(() => {
+    authLib.setSessionUpgradeHandler(async (fresh) => {
+      await handleAccountSwitch(fresh);
+      if (!mounted.current) return;
+      setUser(fresh);
+      setSessionVerified(true);
+    });
+    return () => authLib.setSessionUpgradeHandler(null);
+  }, []);
+
   const clearSignedOutReason = useCallback(() => setSignedOutReason(null), []);
 
   return (

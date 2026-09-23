@@ -1,4 +1,4 @@
-import { getToken, isLocalToken } from "./auth";
+import { getToken, isLocalToken, upgradeLocalSession } from "./auth";
 import { getServerUrl, REQUEST_TIMEOUT_MS } from "./config";
 import { AppError } from "./errors";
 import { baseHeaders, fetchWithTimeout, kindForStatus, readBody } from "./http";
@@ -32,21 +32,15 @@ export async function authFetch<T = any>(
   options: FetchOptions = {}
 ): Promise<T> {
   const { signal, timeoutMs = REQUEST_TIMEOUT_MS, skipAuthFailureHandler, ...init } = options;
-  const [token, base] = await Promise.all([getToken(), getServerUrl()]);
+  const [stored, base] = await Promise.all([getToken(), getServerUrl()]);
   if (!base) throw new AppError("No server configured.", "validation");
 
-  // A bundled session's token means nothing to the server. Sending it
-  // earns a 401 the moment the server comes back, which used to sign the
-  // officer out mid-event — and if the server had no account for them
-  // yet, they could not sign back in to the device holding their scans.
-  // Keep the scans queued until they sign in against the server.
-  if (token && isLocalToken(token)) {
-    throw new AppError(
-      "Signed in with a built-in account, so nothing can be uploaded. Your scans are saved on " +
-        "this device — sign out and back in once the server is up to upload them.",
-      "validation"
-    );
-  }
+  // A bundled session's token means nothing to the server, and sending it
+  // would earn a 401 that signs the officer out mid-event. Swap it for a
+  // real session first; if the server can't be reached or doesn't know
+  // the account, this throws and the scans stay queued on the device.
+  const token = stored && isLocalToken(stored) ? await upgradeLocalSession() : stored;
+  if (signal?.aborted) throw new AppError("Request cancelled.", "cancelled");
 
   const started = Date.now();
   const res = await fetchWithTimeout(

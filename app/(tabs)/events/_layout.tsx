@@ -22,10 +22,6 @@ export default function EventsLayout() {
           headerTitleAlign: "left",
         }}
       />
-      <Stack.Screen
-        name="create"
-        options={{ title: "New event", presentation: "modal" }}
-      />
       <Stack.Screen name="[eventId]" options={{ headerShown: false }} />
     </Stack>
   );

@@ -63,34 +63,42 @@ beforeEach(() => {
 describe("runSync stage isolation", () => {
   /**
    * The regression that mattered most: every stage used to share one try
-   * block, so a 404 from /api/events/sync — an endpoint whose contract is
-   * still an assumption — aborted the pass before a single scan was
-   * uploaded.
+   * block, so one broken events endpoint aborted the pass before a single
+   * scan was uploaded.
    */
   it("still uploads attendance when the events endpoint is broken", async () => {
-    mockDb.getPendingEvents.mockResolvedValue([
-      { id: "tmp_1", name: "Orientation", description: null, startsAt: null, courses: [], yearLevels: [], createdBy: "a" },
-    ]);
     mockDb.getPendingEntries.mockResolvedValueOnce([ENTRY]).mockResolvedValue([]);
 
     routeApi({
-      "/api/events/sync": () => {
+      "/api/events": () => {
         throw new AppError("Not found", "validation", { status: 404 });
       },
-      "/api/events": () => ({ events: [] }),
       "/api/attendance/sync": () => ({ acceptedIds: ["e1"], serverTime: "2026-09-20T02:00:00.000Z" }),
       "/api/students": () => ({ students: [] }),
     });
 
     const result = await runSync();
 
-    expect(result.stages.eventsPush?.ok).toBe(false);
+    expect(result.stages.eventsPull?.ok).toBe(false);
     expect(result.stages.attendancePush?.ok).toBe(true);
     expect(result.stages.attendancePull?.ok).toBe(true);
     expect(result.stages.roster?.ok).toBe(true);
     expect(mockDb.markSynced).toHaveBeenCalledWith(["e1"]);
     // The failure is still reported, just not fatal.
     expect(result.error).toBe("Not found");
+  });
+
+  it("never pushes events; they are managed on the server", async () => {
+    routeApi({
+      "/api/events": () => ({ events: [] }),
+      "/api/attendance/sync": () => ({ acceptedIds: [], serverTime: "2026-09-20T02:00:00.000Z" }),
+      "/api/students": () => ({ students: [] }),
+    });
+
+    await runSync();
+
+    const paths = mockFetch.mock.calls.map((c) => c[0]);
+    expect(paths).not.toContain("/api/events/sync");
   });
 
   it("makes no requests at all while offline", async () => {

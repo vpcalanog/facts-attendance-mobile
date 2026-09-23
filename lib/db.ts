@@ -42,6 +42,7 @@ export interface EventRow {
   name: string;
   description: string | null;
   startsAt: string | null;
+  endsAt: string | null;
   courses: string[];
   yearLevels: string[];
   createdBy: string | null;
@@ -57,6 +58,7 @@ export interface RemoteEvent {
   name: string;
   description?: string | null;
   startsAt?: string | null;
+  endsAt?: string | null;
   courses?: string[];
   yearLevels?: string[];
   createdBy?: string | null;
@@ -69,7 +71,7 @@ export interface RemoteEvent {
 export const MAX_PUSH_ATTEMPTS = 5;
 
 const DEVICE_ID_KEY = "device_id";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -182,6 +184,7 @@ async function doInit(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, "attendance", "attempts", "attempts INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "attendance", "last_error", "last_error TEXT");
   await ensureColumn(db, "attendance", "dead", "dead INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn(db, "events", "ends_at", "ends_at TEXT");
 
   await db.execAsync(`
     CREATE INDEX IF NOT EXISTS idx_attendance_event ON attendance (event_id);
@@ -603,6 +606,7 @@ function parseEventRow(row: any): EventRow {
     name: row.name,
     description: row.description || null,
     startsAt: row.startsAt || null,
+    endsAt: row.endsAt || null,
     courses: safeParseArray(row.courses),
     yearLevels: safeParseArray(row.yearLevels),
     createdBy: row.createdBy || null,
@@ -611,7 +615,7 @@ function parseEventRow(row: any): EventRow {
   };
 }
 
-const EVENT_COLUMNS = `id, name, description, starts_at as startsAt, courses, year_levels as yearLevels,
+const EVENT_COLUMNS = `id, name, description, starts_at as startsAt, ends_at as endsAt, courses, year_levels as yearLevels,
                        created_by as createdBy, synced, updated_at as updatedAt`;
 
 // Creates an event locally (synced = 0) so admins can create events
@@ -655,6 +659,7 @@ export async function createEventLocal({
     name,
     description: description || null,
     startsAt: startsAt || null,
+    endsAt: null,
     courses,
     yearLevels,
     createdBy,
@@ -679,13 +684,14 @@ async function upsertEventRow(
 ): Promise<void> {
   const now = new Date().toISOString();
   await t.runAsync(
-    `INSERT OR REPLACE INTO events (id, name, description, starts_at, courses, year_levels, created_by, synced, updated_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM events WHERE id = ?), ?))`,
+    `INSERT OR REPLACE INTO events (id, name, description, starts_at, ends_at, courses, year_levels, created_by, synced, updated_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM events WHERE id = ?), ?))`,
     [
       e.id,
       e.name,
       e.description || null,
       e.startsAt || null,
+      e.endsAt || null,
       JSON.stringify(e.courses || []),
       JSON.stringify(e.yearLevels || []),
       e.createdBy || null,

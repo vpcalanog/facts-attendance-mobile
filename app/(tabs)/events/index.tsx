@@ -1,12 +1,10 @@
 import SyncStatusBadge from "@/components/sync-status-badge";
 import { BRAND } from "@/constants/brand";
-import { useAuth } from "@/context/auth-context";
 import { useSync } from "@/context/sync-context";
 import { EventRow, getEvents } from "@/lib/db";
 import { userMessage } from "@/lib/errors";
-import { fmtTimestamp } from "@/lib/format";
+import { fmtTimeRange } from "@/lib/format";
 import { log } from "@/lib/logger";
-import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -20,7 +18,6 @@ import {
 } from "react-native";
 
 export default function EventsScreen() {
-  const { user } = useAuth();
   const { sync, dbReady, dbError, lastSyncError, online } = useSync();
   const router = useRouter();
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -28,10 +25,6 @@ export default function EventsScreen() {
   const [loadError, setLoadError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
-
-  // ASSUMPTION: role === "admin" gates event creation. Adjust this if
-  // your backend uses a different role string.
-  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     mounted.current = true;
@@ -80,16 +73,6 @@ export default function EventsScreen() {
       <View style={styles.toolbar}>
         <View style={styles.header}>
           <Text style={styles.title}>Events</Text>
-          {isAdmin && (
-            <TouchableOpacity
-              style={styles.newButton}
-              onPress={() => router.push("/events/create")}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="add" size={16} color={BRAND.void} />
-              <Text style={styles.newButtonText}>New</Text>
-            </TouchableOpacity>
-          )}
         </View>
         <View style={styles.statusRow}>
           <SyncStatusBadge />
@@ -132,7 +115,7 @@ export default function EventsScreen() {
               </Text>
             ) : null}
             {item.startsAt ? (
-              <Text style={styles.meta}>{fmtTimestamp(item.startsAt)}</Text>
+              <Text style={styles.meta}>{fmtTimeRange(item.startsAt, item.endsAt)}</Text>
             ) : null}
             {item.synced === 0 && <Text style={styles.pendingTag}>Not yet synced</Text>}
             {(item.courses.length > 0 || item.yearLevels.length > 0) && (
@@ -156,7 +139,7 @@ export default function EventsScreen() {
             <ActivityIndicator style={{ marginTop: 40 }} color={BRAND.signal} />
           ) : (
             <Text style={styles.empty}>
-              {isAdmin ? "No events yet — tap New to create one." : "No events yet."}
+              No events yet. Events are set up on the server and appear here after a sync.
             </Text>
           )
         }
@@ -175,16 +158,6 @@ const styles = StyleSheet.create({
   },
   statusRow: { marginTop: 8 },
   title: { color: BRAND.bone, fontSize: 22, fontWeight: "800" },
-  newButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: BRAND.signal,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  newButtonText: { color: BRAND.void, fontWeight: "800", fontSize: 13 },
   banner: {
     backgroundColor: BRAND.amberDim,
     borderRadius: 10,

@@ -218,6 +218,24 @@ describe("locally created events", () => {
   });
 });
 
+describe("events pulled from the server", () => {
+  it("keep the end time, so the list can show the event's window", async () => {
+    await db.upsertRemoteEvents([
+      {
+        id: "ccit-fair-2026",
+        name: "CCIT Fair",
+        startsAt: "2026-09-24T08:00:00+08:00",
+        endsAt: "2026-09-24T09:30:00+08:00",
+      },
+    ]);
+
+    await expect(db.getEvent("ccit-fair-2026")).resolves.toMatchObject({
+      startsAt: "2026-09-24T08:00:00+08:00",
+      endsAt: "2026-09-24T09:30:00+08:00",
+    });
+  });
+});
+
 describe("pruning events deleted on the server", () => {
   it("removes a synced event the server no longer lists", async () => {
     await db.upsertRemoteEvents([
@@ -384,7 +402,7 @@ describe("event eligibility", () => {
   };
 
   it("allows everyone when the event is unscoped", () => {
-    const event = { ...EVENT_INPUT, id: "ev1", description: null, startsAt: null };
+    const event = { ...EVENT_INPUT, id: "ev1", description: null, startsAt: null, endsAt: null };
     expect(db.checkEventEligibility(event, student)).toBeNull();
   });
 
@@ -394,6 +412,7 @@ describe("event eligibility", () => {
       id: "ev1",
       description: null,
       startsAt: null,
+      endsAt: null,
       courses: ["BSCS"],
     };
     expect(db.checkEventEligibility(byCourse, student)).toMatch(/course list/);
@@ -403,13 +422,14 @@ describe("event eligibility", () => {
       id: "ev1",
       description: null,
       startsAt: null,
+      endsAt: null,
       yearLevels: ["4th"],
     };
     expect(db.checkEventEligibility(byYear, student)).toMatch(/year level list/);
   });
 
   it("stays quiet for someone who isn't on the roster at all", () => {
-    const event = { ...EVENT_INPUT, id: "ev1", description: null, startsAt: null, courses: ["BSCS"] };
+    const event = { ...EVENT_INPUT, id: "ev1", description: null, startsAt: null, endsAt: null, courses: ["BSCS"] };
     // That case has its own dedicated "Not in roster" state.
     expect(db.checkEventEligibility(event, null)).toBeNull();
   });

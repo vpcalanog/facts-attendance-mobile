@@ -1,10 +1,8 @@
 import NetInfo from "@react-native-community/netinfo";
 import { authFetch } from "./api";
 import {
-  applyEventSyncResult,
   getMeta,
   getPendingEntries,
-  getPendingEvents,
   markPushFailed,
   markSynced,
   pruneMissingEvents,
@@ -216,34 +214,11 @@ export async function pullRoster(
 }
 
 /**
- * Push events created on-device (by an admin) up to the server. The server
- * assigns the real id; `accepted` maps each temp local id to the server's
- * version of that event so we can replace it locally and re-point any
- * attendance already logged against the temp id.
+ * GET /api/events -> { events: RemoteEvent[] }
  *
- * ASSUMED CONTRACT — matches the existing /api/attendance/sync shape:
- *   POST /api/events/sync  { events: EventRow[] }
- *   -> { accepted: [{ tempId, event: RemoteEvent }], rejected?: any[] }
+ * Events are hardcoded on the server and are read-only here: the app
+ * pulls them and never creates or edits them.
  */
-export async function pushPendingEvents(signal?: AbortSignal): Promise<{ pushed: number }> {
-  const pending = await getPendingEvents(50);
-  if (!pending.length) return { pushed: 0 };
-
-  const data = await authFetch<{ accepted?: unknown }>("/api/events/sync", {
-    method: "POST",
-    body: JSON.stringify({ events: pending }),
-    signal,
-  });
-
-  const accepted = (Array.isArray(data.accepted) ? data.accepted : []).filter(
-    (a: any): a is { tempId: string; event: RemoteEvent } =>
-      !!a && typeof a.tempId === "string" && !!a.event && typeof a.event.id === "string"
-  );
-  await applyEventSyncResult(accepted);
-  return { pushed: accepted.length };
-}
-
-/** ASSUMED CONTRACT: GET /api/events -> { events: RemoteEvent[] } */
 export async function pullEvents(
   { force = false }: { force?: boolean } = {},
   signal?: AbortSignal
@@ -275,7 +250,7 @@ async function isFresh(key: string, intervalMs: number): Promise<boolean> {
 
 // --- orchestration -----------------------------------------------------
 
-export type StageName = "eventsPush" | "eventsPull" | "attendancePush" | "attendancePull" | "roster";
+export type StageName = "eventsPull" | "attendancePush" | "attendancePull" | "roster";
 
 export interface SyncResult {
   online: boolean;
@@ -319,11 +294,10 @@ async function runStage<T>(
  * Runs a full sync pass.
  *
  * Every stage is independent. The old version ran all five inside one
- * try block, so a single failing endpoint — /api/events/sync, whose
- * contract is still an assumption — aborted the pass before attendance
- * was ever uploaded. Uploading scans is the one thing this app cannot
- * afford to skip, so a broken events endpoint must not be able to block
- * it.
+ * try block, so a single failing endpoint aborted the pass before
+ * attendance was ever uploaded. Uploading scans is the one thing this app
+ * cannot afford to skip, so a broken events endpoint must not be able to
+ * block it.
  *
  * Never throws: callers (a timer, a NetInfo listener, a pull-to-refresh)
  * read `result.error` instead.
@@ -349,9 +323,6 @@ export async function runSync({
     return { ...result, deferred: true };
   }
 
-  // Events are pushed first so a scan taken against a just-created event
-  // has the real server id to reconcile against on the very next pull.
-  await runStage("eventsPush", result, () => pushPendingEvents(signal));
   await runStage("eventsPull", result, () => pullEvents({ force: forceEvents }, signal));
 
   const push = await runStage("attendancePush", result, () => pushPendingAttendance(signal));

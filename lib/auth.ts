@@ -1,6 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 import { SERVER_URL, SESSION_TIMEOUT_MS } from "./config";
-import { DevAccount, findDevAccount, OFFLINE_AUTH_ENABLED } from "./dev-accounts";
+import { DEV_ACCOUNTS, DevAccount, findDevAccount, OFFLINE_AUTH_ENABLED } from "./dev-accounts";
 import { AppError, toAppError } from "./errors";
 import { baseHeaders, fetchWithTimeout, readBody } from "./http";
 import { log } from "./logger";
@@ -146,13 +146,25 @@ export async function login(credentials: {
   }
 }
 
-async function loginViaServer({
+async function loginViaServer(credentials: {
+  username: string;
+  password: string;
+}): Promise<StaffUser> {
+  const { token, user } = await requestServerSession(credentials);
+  await writeSecure(TOKEN_KEY, token);
+  await writeSecure(USER_KEY, JSON.stringify(user));
+  log.info("signed in", { username: user.username, role: user.role });
+  return user;
+}
+
+/** Asks the server for a session without storing it. */
+async function requestServerSession({
   username,
   password,
 }: {
   username: string;
   password: string;
-}): Promise<StaffUser> {
+}): Promise<{ token: string; user: StaffUser }> {
   const res = await fetchWithTimeout(
     `${SERVER_URL}/api/auth/login`,
     {
@@ -190,10 +202,103 @@ async function loginViaServer({
     });
   }
 
-  await writeSecure(TOKEN_KEY, token);
-  await writeSecure(USER_KEY, JSON.stringify(user));
-  log.info("signed in", { username: user.username, role: user.role });
-  return user;
+  return { token, user };
+}
+
+// --- upgrading a bundled session ---------------------------------------
+
+/**
+ * Told when a bundled session has been swapped for a server one, so the
+ * auth context can show the server's account and mark the session
+ * verified. The context registers itself at startup.
+ */
+type SessionUpgradeHandler = (user: StaffUser) => void | Promise<void>;
+let onSessionUpgraded: SessionUpgradeHandler | null = null;
+
+export function setSessionUpgradeHandler(fn: SessionUpgradeHandler | null): void {
+  onSessionUpgraded = fn;
+}
+
+let upgrading: Promise<string> | null = null;
+
+/**
+ * Trades a bundled session for a real server token, signing in with the
+ * same built-in credentials the officer used offline. Returns the token
+ * to send.
+ *
+ * A bundled token means nothing to the server, and sending it would earn
+ * a 401 that signs the officer out mid-event. Upgrading instead lets a
+ * built-in account upload its scans as soon as the server is reachable,
+ * with no sign-out and sign-in. The officer keeps their queue: the new
+ * session has the same username, which the account-switch guard treats
+ * as the same person.
+ *
+ * Concurrent callers share one attempt, so a sync pass that fires several
+ * requests at once signs in once.
+ */
+export function upgradeLocalSession(): Promise<string> {
+  if (!upgrading) {
+    upgrading = doUpgradeLocalSession().finally(() => {
+      upgrading = null;
+    });
+  }
+  return upgrading;
+}
+
+async function doUpgradeLocalSession(): Promise<string> {
+  const token = await getToken();
+  if (!token) throw new AppError("Not signed in.", "auth");
+  if (!isLocalToken(token)) return token;
+
+  const username = token.slice(LOCAL_TOKEN_PREFIX.length).toLowerCase();
+  const account = DEV_ACCOUNTS.find((a) => a.username.toLowerCase() === username);
+  if (!account) {
+    throw new AppError(
+      "This built-in account is no longer available. Your scans are saved on this device — " +
+        "sign out and back in to upload them.",
+      "validation"
+    );
+  }
+
+  let session: { token: string; user: StaffUser };
+  try {
+    session = await requestServerSession({
+      username: account.username,
+      password: account.password,
+    });
+  } catch (err) {
+    const e = toAppError(err);
+    // The server answered and refused: it has no such account, or a
+    // different password for it. Not a dead session — the officer keeps
+    // working offline, and their scans stay queued.
+    if (e.kind === "validation") {
+      throw new AppError(
+        "The server doesn't recognise this built-in account, so nothing can be uploaded yet. " +
+          "Your scans are saved on this device.",
+        "validation",
+        { status: e.status }
+      );
+    }
+    throw e;
+  }
+
+  // The officer may have signed out while the request was in flight.
+  // Storing the new token then would sign them straight back in.
+  if ((await getToken()) !== token) {
+    throw new AppError("The session changed while signing in.", "cancelled");
+  }
+
+  await writeSecure(TOKEN_KEY, session.token);
+  await writeSecure(USER_KEY, JSON.stringify(session.user));
+  log.info("upgraded a built-in session to a server session", {
+    username: session.user.username,
+  });
+  try {
+    await onSessionUpgraded?.(session.user);
+  } catch (err) {
+    log.warn("session upgrade handler failed", { message: toAppError(err).message });
+  }
+  return session.token;
 }
 
 export async function logout(): Promise<void> {

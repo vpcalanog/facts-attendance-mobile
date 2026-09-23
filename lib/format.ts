@@ -37,6 +37,14 @@ export function fmtTimestamp(iso: string): string {
   )}`;
 }
 
+/** "Sep 24 · 08:00 AM – 09:30 AM", or just the start when there's no end. */
+export function fmtTimeRange(startIso: string, endIso?: string | null): string {
+  const start = fmtTimestamp(startIso);
+  const end = endIso ? parse(endIso) : null;
+  if (!end || start === "—") return start;
+  return `${start} – ${end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
 export function isToday(iso: string): boolean {
   const d = parse(iso);
   if (!d) return false;
